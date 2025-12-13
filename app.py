@@ -284,6 +284,55 @@ def load_model(model_name: str):
         raise
 
 
+def _extract_text_from_pipeline_result(val: Any) -> str:
+    """Normalize various pipeline return shapes into a single assistant text string.
+
+    Handles common shapes:
+    - [{'generated_text': '...'}]
+    - [{'generated_text': [{'role':'user',...}, {'role':'assistant','content':'...'}]}]
+    - {'generated_text': '...'}
+    - nested dict/list structures returned by some chat-capable pipelines
+    """
+    try:
+        # Strings are already fine
+        if isinstance(val, str):
+            return val
+
+        # Lists: prefer the last assistant/content-like entry
+        if isinstance(val, list):
+            # Try to find assistant content from list of dicts
+            for item in reversed(val):
+                if isinstance(item, dict):
+                    # common keys
+                    for key in ("content", "generated_text", "text"):
+                        if key in item:
+                            res = _extract_text_from_pipeline_result(item[key])
+                            if res:
+                                return res
+            # If list of strings or no obvious dicts, join stringified entries
+            parts = [_extract_text_from_pipeline_result(x) if not isinstance(x, str) else x for x in val]
+            return "\n".join([p for p in parts if p])
+
+        # Dicts: look for common keys then scan values
+        if isinstance(val, dict):
+            for key in ("generated_text", "text", "content"):
+                if key in val:
+                    return _extract_text_from_pipeline_result(val[key])
+            # Otherwise search values for content-like strings
+            for v in val.values():
+                res = _extract_text_from_pipeline_result(v)
+                if res:
+                    return res
+
+        # Fallback: stringify
+        return str(val)
+    except Exception:
+        try:
+            return str(val)
+        except Exception:
+            return ""
+
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
     model_name = request.model
@@ -358,30 +407,24 @@ async def chat(request: ChatRequest):
             # First, try chat-style invocation: pass the messages list directly to the pipeline
             # Some remote (chat-capable) pipelines support being called with a messages list
             try:
+                print(request.messages)
                 result = pipe(request.messages, max_new_tokens=request.max_tokens, temperature=request.temperature, do_sample=(request.temperature > 0.0))
+                print(result)
             except Exception:
                 # Fallback to the legacy prompt string for pipelines that expect a single string
                 result = pipe(prompt, max_new_tokens=request.max_tokens, temperature=request.temperature, do_sample=(request.temperature > 0.0))
 
             gen_duration = time.time_ns() - gen_start
 
-            # Normalize possible return shapes from different pipelines
-            text = ""
+            # Normalize possible return shapes from different pipelines into a plain text string
             try:
-                if isinstance(result, list) and len(result) > 0:
-                    first = result[0]
-                    if isinstance(first, dict):
-                        # common key names: 'generated_text', 'text'
-                        text = first.get("generated_text") or first.get("text") or ""
-                    else:
-                        text = str(first)
-                elif isinstance(result, dict):
-                    text = result.get("generated_text") or result.get("text") or ""
-                else:
-                    text = str(result)
-                text = text.strip()
+                text = _extract_text_from_pipeline_result(result).strip()
             except Exception:
-                text = str(result).strip()
+                # Fallback to a safe string representation
+                try:
+                    text = str(result)
+                except Exception:
+                    text = ""
         except Exception:
             log.exception("Transformers pipeline generation failed for model %s", model_name)
             raise HTTPException(status_code=500, detail="Generation error on transformers backend")
@@ -427,20 +470,62 @@ async def list_models():
     # Return models in an Ollama-compatible list structure. We include cached models plus example known models.
     known = ["Qwen/Qwen2-72B-Chat", "meta-llama/Meta-Llama-3-70B-Instruct"]
     models = []
-    # include cached models first
+
+    # include models tracked in model_meta (these may have been pulled or initialized)
     for name, meta in model_meta.items():
         models.append({
             "model": name,
             "description": meta.get("description"),
-            "loaded": True,
+            "loaded": True if meta.get("backend") else False,
             "backend": meta.get("backend"),
             "size_bytes": meta.get("size_bytes"),
+            "local_path": meta.get("local_path"),
             "load_duration": meta.get("load_duration_ns"),
         })
 
-    # include known models that are not cached
+    # Discover locally present HF snapshots in the HF cache and include them if not already present
+    try:
+        hf_home = os.getenv("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+        if os.path.isdir(hf_home):
+            for entry in os.listdir(hf_home):
+                # Hugging Face snapshot dirs often start with 'models--' and encode repo id: models--owner--repo
+                if not entry.startswith("models--"):
+                    continue
+                repo_part = entry[len("models--"):]
+                # Convert models--owner--repo to owner/repo
+                repo_id = repo_part.replace("--", "/")
+                if repo_id in model_meta:
+                    continue
+                full_path = os.path.join(hf_home, entry)
+                # compute approximate size (sum of files)
+                size_bytes = None
+                try:
+                    total = 0
+                    for root, _, files in os.walk(full_path):
+                        for f in files:
+                            try:
+                                total += os.path.getsize(os.path.join(root, f))
+                            except Exception:
+                                pass
+                    size_bytes = total
+                except Exception:
+                    size_bytes = None
+
+                models.append({
+                    "model": repo_id,
+                    "description": None,
+                    "loaded": False,
+                    "backend": None,
+                    "size_bytes": size_bytes,
+                    "local_path": full_path,
+                    "load_duration": None,
+                })
+    except Exception:
+        log.exception("Error while scanning HF cache for models")
+
+    # include known models that are not present
     for k in known:
-        if k not in model_meta:
+        if not any(m.get("model") == k for m in models):
             models.append({"model": k, "description": None, "loaded": False, "backend": None, "size_bytes": None, "load_duration": None})
 
     return {"models": models}
