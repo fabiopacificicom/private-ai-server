@@ -12,16 +12,19 @@ A high-performance, GPU-optimized FastAPI server for serving Hugging Face langua
 - 💾 **Smart memory management**: Automatic 4-bit quantization for models >14GB, LRU cache with configurable limits
 - 🎯 **Explicit control**: Models must be explicitly pulled before use (no surprise downloads during inference)
 - 🔧 **Production-ready**: Background job system for non-blocking downloads, CUDA OOM prevention, MoE/custom model support
-- 📊 **Observable**: Comprehensive diagnostics endpoints (`/status`, `/diag`, `/jobs`)
+- 📊 **Observable**: Comprehensive diagnostics endpoints (`/health`, `/status`, `/diag`, `/jobs`)
+- 🔄 **Streaming**: Real-time response streaming with Server-Sent Events (SSE)
 
 **Key Features:**
 
 - **Backends**: vLLM (preferred for max GPU performance) → Transformers pipeline fallback
 - **Auto-quantization**: 4-bit (q4/nf4) for models exceeding threshold using bitsandbytes
+- **Streaming responses**: Server-Sent Events (SSE) for real-time text generation
 - **Non-blocking downloads**: Background `/pull` jobs with status tracking
 - **LRU caching**: Configurable model cache with automatic eviction
 - **CUDA-optimized**: Memory fragmentation prevention, aggressive cleanup, RTX 4090 tested
 - **MoE support**: Handles custom configs (Qwen3-Omni) with `trust_remote_code` fallback
+- **Health monitoring**: `/health` endpoint for load balancers and production deployments
 
 ## Quick Start
 
@@ -203,6 +206,41 @@ curl -X POST http://localhost:8005/pull \
 }
 ```
 
+**Streaming support:**
+
+To enable streaming responses, set `"stream": true` in the request:
+
+```bash
+# Example: Streaming chat request
+curl -N -X POST http://localhost:8005/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt2",
+    "messages": [{"role": "user", "content": "Write a short story"}],
+    "stream": true,
+    "max_tokens": 100
+  }'
+```
+
+**Streaming response format (SSE):**
+
+```
+data: {"delta": {"content": "Once"}, "done": false}
+
+data: {"delta": {"content": " upon"}, "done": false}
+
+data: {"delta": {"content": " a time"}, "done": false}
+
+...
+
+data: {"delta": {}, "done": true}
+```
+
+- Chunks arrive as Server-Sent Events (SSE) with `text/event-stream` media type
+- Each chunk has `delta.content` with incremental text
+- Final chunk has `done: true` with empty delta
+- Supports both vLLM and transformers backends
+
 ---
 
 ### GET /models
@@ -289,6 +327,47 @@ Poll this endpoint to track download progress after calling `/pull`.
   }
 }
 ```
+
+---
+
+### GET /health
+
+**Health check endpoint for load balancers and monitoring**
+
+Returns server health status, uptime, cache statistics, and GPU metrics.
+
+**Response:**
+
+```json
+{
+  "status": "healthy",                   // healthy|degraded
+  "uptime_seconds": 3600,
+  "models_cached": 2,
+  "cache_limit": 2,
+  "downloads_active": 0,
+  "downloads_queued": 1,
+  "torch_version": "2.9.1+cu126",
+  "cuda_available": true,
+  "gpu_status": "available",             // available|unavailable|error
+  "gpu_memory_allocated_mb": 8192.5,
+  "gpu_memory_reserved_mb": 10240.0
+}
+```
+
+**Status values:**
+- `healthy`: All inference backends available, server operational
+- `degraded`: No inference backends (transformers/vLLM) available
+
+**GPU status:**
+- `available`: CUDA available and GPU accessible
+- `unavailable`: CUDA not available or no GPU
+- `error`: Error while collecting GPU stats
+
+**Use cases:**
+- Load balancer health checks
+- Monitoring and alerting
+- Capacity planning (via GPU memory stats)
+- Uptime tracking
 
 ---
 

@@ -18,6 +18,7 @@ except Exception:
     torch = None
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 try:
@@ -60,6 +61,9 @@ except Exception:
 
 app = FastAPI()
 
+# Track server start time for uptime calculation
+server_start_time = time.time()
+
 # Global state
 current_model: Optional[object] = None
 current_model_name: Optional[str] = None
@@ -75,6 +79,7 @@ model_meta: Dict[str, Dict[str, Any]] = {}
 MAX_CACHE_MODELS = int(os.getenv("MAX_CACHE_MODELS", "2"))
 COOLDOWN_SECONDS = int(os.getenv("MODEL_LOAD_COOLDOWN", "300"))
 MAX_CONCURRENT_PULLS = int(os.getenv("MAX_CONCURRENT_PULLS", "2"))
+STREAMING_THREAD_TIMEOUT = int(os.getenv("STREAMING_THREAD_TIMEOUT", "30"))  # Timeout for streaming generation threads
 
 # Job registry for background pulls (job_id -> job metadata)
 jobs: Dict[str, Dict[str, Any]] = {}
@@ -90,6 +95,7 @@ class ChatRequest(BaseModel):
     messages: List[Dict[str, str]]
     max_tokens: int = 512
     temperature: float = 0.7
+    stream: bool = False  # Enable streaming responses
 
 
 def _evict_lru_if_needed():
@@ -428,10 +434,189 @@ def _extract_text_from_pipeline_result(val: Any) -> str:
             return ""
 
 
+async def _stream_chat_response(model_name: str, messages: List[Dict[str, str]], max_tokens: int = 512, temperature: float = 0.7):
+    """Generate streaming chat response chunks in SSE format.
+    
+    Supports both vLLM and transformers backends with TextIteratorStreamer.
+    Yields Server-Sent Events (SSE) formatted chunks.
+    """
+    import json
+    from typing import AsyncIterator
+    
+    # Load model if not already loaded
+    if current_model_name != model_name:
+        try:
+            load_model(model_name)
+        except Exception as e:
+            log.exception("Failed to load model for streaming")
+            error_chunk = {"error": str(e), "done": True}
+            yield f"data: {json.dumps(error_chunk)}\n\n"
+            return
+    
+    if current_model is None:
+        error_chunk = {"error": "No model loaded", "done": True}
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+        return
+    
+    backend = model_meta.get(current_model_name, {}).get("backend")
+    
+    # Build prompt for backends that need it
+    prompt = ""
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if role == "system":
+            prompt += f"System: {content}\n"
+        elif role == "user":
+            prompt += f"User: {content}\n"
+        elif role == "assistant":
+            prompt += f"Assistant: {content}\n"
+    prompt += "Assistant: "
+    
+    # vLLM streaming path
+    if backend == "vllm":
+        try:
+            if SamplingParams is None:
+                error_chunk = {"error": "vLLM SamplingParams not available", "done": True}
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+                return
+            
+            sampling_params = SamplingParams(
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            
+            # vLLM supports streaming through its generate method
+            for output in current_model.generate([prompt], sampling_params, use_tqdm=False):
+                try:
+                    text_delta = output.outputs[0].text
+                    chunk = {"delta": {"content": text_delta}, "done": False}
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                except Exception as e:
+                    log.exception("Error in vLLM streaming")
+                    error_chunk = {"error": str(e), "done": True}
+                    yield f"data: {json.dumps(error_chunk)}\n\n"
+                    return
+            
+            # Final chunk
+            final_chunk = {"delta": {}, "done": True}
+            yield f"data: {json.dumps(final_chunk)}\n\n"
+            
+        except Exception as e:
+            log.exception("vLLM streaming failed")
+            error_chunk = {"error": str(e), "done": True}
+            yield f"data: {json.dumps(error_chunk)}\n\n"
+    
+    # Transformers streaming path
+    elif backend and backend.startswith("transformers"):
+        try:
+            # Import TextIteratorStreamer for transformers streaming
+            try:
+                from transformers import TextIteratorStreamer
+            except ImportError:
+                error_chunk = {"error": "TextIteratorStreamer not available. Install transformers with streaming support.", "done": True}
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+                return
+            
+            from threading import Thread
+            
+            pipe = current_model
+            tokenizer = getattr(pipe, "tokenizer", None)
+            model_obj = getattr(pipe, "model", None)
+            
+            if tokenizer is None or model_obj is None:
+                error_chunk = {"error": "Pipeline does not expose tokenizer/model for streaming", "done": True}
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+                return
+            
+            # Create streamer
+            streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+            
+            # Prepare generation function to run in thread
+            def generate():
+                try:
+                    # Try messages-based generation first (for chat-capable models)
+                    try:
+                        pipe(messages, max_new_tokens=max_tokens, temperature=temperature, do_sample=(temperature > 0.0), streamer=streamer)
+                    except (TypeError, AttributeError, ValueError) as e_messages:
+                        # Fallback to prompt-based generation for models that don't support messages format
+                        log.debug("Messages-based generation failed (%s), falling back to prompt", type(e_messages).__name__)
+                        inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
+                        input_ids = inputs.get("input_ids")
+                        
+                        # Move to device
+                        try:
+                            next_param = next(model_obj.parameters())
+                            model_device = next_param.device
+                            input_ids = input_ids.to(model_device)
+                        except Exception:
+                            pass
+                        
+                        gen_kwargs = {"max_new_tokens": max_tokens, "streamer": streamer}
+                        if temperature and temperature > 0.0:
+                            gen_kwargs.update({"do_sample": True, "temperature": temperature})
+                        else:
+                            gen_kwargs.update({"do_sample": False})
+                        
+                        model_obj.generate(input_ids=input_ids, **gen_kwargs)
+                except Exception as e:
+                    log.exception("Error in generation thread")
+            
+            # Start generation in background thread
+            thread = Thread(target=generate)
+            thread.start()
+            
+            # Stream chunks as they become available
+            try:
+                for text in streamer:
+                    if text:
+                        chunk = {"delta": {"content": text}, "done": False}
+                        yield f"data: {json.dumps(chunk)}\n\n"
+            except Exception as e:
+                log.exception("Error streaming from TextIteratorStreamer")
+                error_chunk = {"error": str(e), "done": True}
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+                thread.join(timeout=5)
+                return
+            
+            # Wait for thread to complete
+            thread.join(timeout=STREAMING_THREAD_TIMEOUT)
+            
+            # Final chunk
+            final_chunk = {"delta": {}, "done": True}
+            yield f"data: {json.dumps(final_chunk)}\n\n"
+            
+        except Exception as e:
+            log.exception("Transformers streaming failed")
+            error_chunk = {"error": str(e), "done": True}
+            yield f"data: {json.dumps(error_chunk)}\n\n"
+    
+    else:
+        error_chunk = {"error": f"Streaming not supported for backend: {backend}", "done": True}
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
     model_name = request.model
+    
+    # If streaming is requested, return StreamingResponse
+    if request.stream:
+        return StreamingResponse(
+            _stream_chat_response(
+                model_name=model_name,
+                messages=request.messages,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
 
+    # Non-streaming response (existing implementation)
     # Load the model if different
     if current_model_name != model_name:
         try:
@@ -874,6 +1059,55 @@ async def get_job(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint for load balancers and monitoring.
+    
+    Returns overall server health status, uptime, cache statistics,
+    and GPU metrics when CUDA is available.
+    """
+    uptime = time.time() - server_start_time
+    
+    # GPU diagnostics
+    gpu_status = "unavailable"
+    gpu_memory_allocated_mb = None
+    gpu_memory_reserved_mb = None
+    
+    if torch is not None and torch.cuda.is_available():
+        try:
+            gpu_status = "available"
+            # Use current device or default to 0 if not set
+            device_idx = torch.cuda.current_device() if hasattr(torch.cuda, 'current_device') else 0
+            gpu_memory_allocated_mb = torch.cuda.memory_allocated(device_idx) / (1024**2)
+            gpu_memory_reserved_mb = torch.cuda.memory_reserved(device_idx) / (1024**2)
+        except Exception:
+            gpu_status = "error"
+            log.exception("Error collecting GPU memory stats")
+    
+    # Determine overall health status
+    status = "healthy"
+    if not transformers_available and LLM is None:
+        status = "degraded"  # No inference backends available
+    
+    # Count active and queued downloads
+    downloads_active = sum(1 for j in jobs.values() if j.get("status") == "running")
+    downloads_queued = sum(1 for j in jobs.values() if j.get("status") == "queued")
+    
+    return {
+        "status": status,
+        "uptime_seconds": int(uptime),
+        "models_cached": len(model_cache),
+        "cache_limit": MAX_CACHE_MODELS,
+        "downloads_active": downloads_active,
+        "downloads_queued": downloads_queued,
+        "torch_version": getattr(torch, "__version__", None) if torch else None,
+        "cuda_available": torch.cuda.is_available() if torch else False,
+        "gpu_status": gpu_status,
+        "gpu_memory_allocated_mb": gpu_memory_allocated_mb,
+        "gpu_memory_reserved_mb": gpu_memory_reserved_mb,
+    }
 
 
 # Run: uvicorn app:app --host 0.0.0.0 --port 8005
