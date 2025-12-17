@@ -1,357 +1,498 @@
-# AI Server (Ollama-compatible drop-in)
+# AI Inference Server
 
-This repository implements a single-process FastAPI server that can act as a drop-in alternative to Ollama for serving local Hugging Face / vLLM models. It supports controlled model downloads via a `/pull` endpoint, local-only `load_model` behavior (no automatic downloads during chat), and runtime quantization (q4) when appropriate.
+A high-performance, GPU-optimized FastAPI server for serving Hugging Face language models. Built as an Ollama-compatible alternative with dynamic model loading, automatic 4-bit quantization for large models, and explicit control over downloads.
 
-Summary
+## Overview
 
-- Server: FastAPI
-- Main features: `/pull` (download snapshot), `/chat` (generate), `/models` (list cached), `/status` (runtime status)
-- Backends: vLLM preferred; Transformers pipeline fallback (supports quantized q4 via bitsandbytes)
+**What it does:** Dynamically loads and serves LLMs from Hugging Face Hub with GPU acceleration, automatic quantization, and intelligent caching.
 
-Quick start
+**Why use it:**
 
-1. Create virtual env and install requirements (example):
+- 🚀 **GPU-optimized**: Prefers vLLM backend, falls back to transformers with CUDA support
+- 💾 **Smart memory management**: Automatic 4-bit quantization for models >14GB, LRU cache with configurable limits
+- 🎯 **Explicit control**: Models must be explicitly pulled before use (no surprise downloads during inference)
+- 🔧 **Production-ready**: Background job system for non-blocking downloads, CUDA OOM prevention, MoE/custom model support
+- 📊 **Observable**: Comprehensive diagnostics endpoints (`/status`, `/diag`, `/jobs`)
+
+**Key Features:**
+
+- **Backends**: vLLM (preferred for max GPU performance) → Transformers pipeline fallback
+- **Auto-quantization**: 4-bit (q4/nf4) for models exceeding threshold using bitsandbytes
+- **Non-blocking downloads**: Background `/pull` jobs with status tracking
+- **LRU caching**: Configurable model cache with automatic eviction
+- **CUDA-optimized**: Memory fragmentation prevention, aggressive cleanup, RTX 4090 tested
+- **MoE support**: Handles custom configs (Qwen3-Omni) with `trust_remote_code` fallback
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.10+
+- NVIDIA GPU with CUDA 12.x (for GPU acceleration)
+- 16GB+ VRAM recommended for large models with quantization
+
+### Installation
+
+1. **Clone and setup environment:**
 
 ```powershell
+git clone <repo-url>
+cd ai-server-py
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+```
+
+2. **Install dependencies:**
+
+```powershell
 pip install -U pip setuptools wheel
 pip install -r requirements.txt
 ```
 
-2. Run server:
+3. **Enable CUDA (Windows):**
+   - If you have an NVIDIA GPU but PyTorch shows CPU-only, run:
+
+   ```powershell
+   .\setup_cuda_pytorch.ps1
+   ```
+
+   - This installs CUDA-enabled PyTorch (CUDA 12.6) and bitsandbytes for quantization
+
+4. **Start the server:**
 
 ```powershell
-. .\.venv\Scripts\Activate.ps1
-uvicorn app:app --host 0.0.0.0 --port 8005
+python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ```
 
-Environment variables
+### First Steps
 
-- `MAX_CACHE_MODELS` (default `2`): max number of model instances kept in memory cache (LRU evict).
-- `MODEL_LOAD_COOLDOWN` (default `300`): seconds to cooldown after a failed model load attempt.
-- `MODEL_Q4_THRESHOLD_BYTES` (default for `/pull` auto: ~14e9): bytes threshold above which `quantize:auto` will prefer q4.
-- `PYTORCH_ALLOC_CONF` (default `expandable_segments:True`): PyTorch CUDA allocator configuration to reduce memory fragmentation and OOM errors. Set automatically by the server.
+1. **Check diagnostics:**
 
-Principles and behaviour
+```bash
+curl http://localhost:8005/diag
+# Should show: cuda_available: true, device: RTX 4090...
+```
 
-- Models are only downloaded via POST `/pull`. `load_model` and `/chat` will not download models automatically — loading a model that was not pulled will return an error instructing the client to call `/pull` first.
-- `/pull` records metadata about the snapshot (`local_path`, `size_bytes`, `preferred_quantized`) so `load_model` uses local files only.
-- If GPU is available, the server will prefer GPU device; else it falls back to CPU.
-- If `bitsandbytes` (and Transformers BitsAndBytesConfig) is available and the model is configured for quantization, the server will attempt 4-bit (q4 / nf4) loading for large models.
-
-API Reference
-
-1) POST /pull
-
-- Purpose: fetch a model snapshot from Hugging Face Hub to the local cache. This endpoint performs the network download and persists metadata so later loads use the local snapshot.
-- Request JSON body fields:
-  - `model` (string, required): HF repo id (e.g. `Qwen/Qwen2-72B-Chat`).
-  - `quantize` (string, optional, default `"auto"`): `"auto"`, `"q4"`, `"fp32"` / `"fp16"` / `"no"`.
-    - `auto`: server will decide q4 vs fp based on model size and policy.
-    - `q4`: prefer 4-bit quantized snapshot at load time.
-    - `fp32` / `fp16` / `no`: prefer full precision (do not force q4).
-  - `init` (boolean, optional, default `false`): if true the server will attempt to initialize (load) the model into memory after download.
-
-- Example request:
+2. **Pull a model:**
 
 ```bash
 curl -X POST http://localhost:8005/pull \
   -H "Content-Type: application/json" \
-  -d '{"model":"Qwen/Qwen2-72B-Chat","quantize":"q4","init":true}'
+  -d '{"model":"gpt2","quantize":"auto","init":true}'
 ```
 
-- Example response (success):
-
-```json
-{
-  "status": "ok",
-  "model": "Qwen/Qwen2-72B-Chat",
-  "cached": true,
-  "backend": {
-    "local_path": "C:\\Users\\...\\hf_cache\\models--Qwen--Qwen2-72B-Chat\\snap-xxx",
-    "preferred_quantized": true,
-    "size_bytes": 42000000000
-  }
-}
-```
-
-Notes:
-
-- Pulling very large models will download many files and take time and disk space. Consider testing with small models first.
-- `quantize` is only a preference; actual quantized loading requires `bitsandbytes` and a compatible `transformers`.
-
-2) POST /chat
-
-- Purpose: generate text using a previously pulled model.
-- Request body (JSON):
-  - `model` (string): model identifier (must have been pulled already).
-  - `messages` (list): list of role/content dicts (OpenAI/Ollama compatible):
-    - example: `[{"role":"user","content":"Hello"}]`
-  - `max_tokens` (int, optional): max new tokens (default 512).
-  - `temperature` (float, optional): sampling temperature (default 0.7).
-
-- Example request:
+3. **Chat with the model:**
 
 ```bash
 curl -X POST http://localhost:8005/chat \
   -H "Content-Type: application/json" \
-  -d '{"model":"my/model","messages":[{"role":"user","content":"Who are you?"}],"max_tokens":256}'
+  -d '{"model":"gpt2","messages":[{"role":"user","content":"Hello!"}]}'
 ```
 
-- Example response (Ollama-like):
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_CACHE_MODELS` | `2` | Maximum models kept in memory (LRU eviction) |
+| `MODEL_LOAD_COOLDOWN` | `300` | Cooldown seconds after failed load before retry |
+| `MODEL_Q4_THRESHOLD_BYTES` | `~14e9` | Size threshold (bytes) for auto q4 quantization |
+| `MAX_CONCURRENT_PULLS` | `2` | Max simultaneous background downloads |
+| `PYTORCH_ALLOC_CONF` | `expandable_segments:True` | Auto-set to reduce CUDA fragmentation |
+
+**Example:**
+
+```powershell
+$env:MAX_CACHE_MODELS = "1"
+$env:MODEL_Q4_THRESHOLD_BYTES = "30000000000"  # 30GB threshold
+python -m uvicorn app:app --host 0.0.0.0 --port 8005
+```
+
+### Core Principles
+
+1. **Explicit downloads only**: Models must be pulled via `/pull` before use. `/chat` will never auto-download.
+2. **Local-only loading**: Once pulled, models load from local HF cache (`~/.cache/huggingface/hub`)
+3. **GPU-first**: Automatically uses GPU when available, CPU fallback otherwise
+4. **Smart quantization**: Models >14GB auto-use 4-bit when `bitsandbytes` available
+5. **LRU caching**: Keeps `MAX_CACHE_MODELS` in memory, evicts oldest when limit exceeded
+6. **Failed-load protection**: 300s cooldown after failed loads prevents retry storms
+
+## API Reference
+
+### POST /pull
+
+**Download and optionally initialize a model**
+
+**Request body:**
 
 ```json
 {
-  "model": "my/model",
-  "created_at": "2025-12-13T13:16:07.977118Z",
-  "message": {"role":"assistant","content":"Hello! I'm..."},
-  "done": true,
-  "done_reason": "stop",
-  "total_duration": 13001890100,
-  "load_duration": 1647499100,
-  "prompt_eval_count": 11,
-  "prompt_eval_duration": null,
-  "eval_count": 161,
-  "eval_duration": 11354391000
+  "model": "Qwen/Qwen3-0.6B",           // HF repo ID (required)
+  "quantize": "auto",                    // auto|q4|fp16|no (optional, default: auto)
+  "init": true                           // Load after download (optional, default: false)
 }
 ```
 
-Notes:
+**Quantization options:**
 
-- The server will use the preferred backend recorded for the model (`vllm` if available, otherwise `transformers` pipeline). The server will not auto-download the model — it must be present locally from `/pull`.
-- For `transformers` pipeline we first try chat-style `pipeline(messages)` invocation; if that is not supported by the pipeline we fall back to building a single prompt string.
+- `auto`: Server decides (q4 if model >14GB, otherwise fp16)
+- `q4`: Force 4-bit quantization (requires bitsandbytes + CUDA)
+- `fp16`/`no`: Full precision (no quantization)
 
-3) GET /models
-
-- Purpose: list cached/pulled models and some metadata.
-- Response structure:
+**Response:**
 
 ```json
-{ "models": [ {"model": "name", "description": null, "loaded": true/false, "backend": "transformers"|"vllm", "size_bytes": 123, "load_duration": 1234 } ] }
+{
+  "status": "accepted",
+  "job_id": "uuid-here"                 // Poll via /jobs/{job_id}
+}
 ```
 
-4) GET /status
-
-- Purpose: runtime diagnostics: whether `vllm` / `transformers` are available, cache size, failed loads, and configured env vars.
-
-Behavioral differences vs Ollama
-
-- This server purposely avoids auto-downloading during generation. Use `/pull` to fetch models explicitly.
-- Quantized loading is available when server environment includes `bitsandbytes` and a compatible `transformers`.
-
-Troubleshooting and tips
-
-- If you see: `Model 'X' not available locally. Use the /pull endpoint...` — call `/pull` first.
-- **CUDA OOM errors**: The server sets `PYTORCH_ALLOC_CONF=expandable_segments:True` to reduce fragmentation. If you still get OOM:
-  - Reduce `MAX_CACHE_MODELS` to 1 to keep fewer models in memory.
-  - Use smaller models or quantized (q4) variants.
-  - Restart the server to clear GPU memory completely.
-  - Check GPU memory usage with `nvidia-smi` and close other GPU-using processes.
-- **Missing `accelerate` error**: Install `accelerate` with `pip install accelerate` for GPU `device_map` support.
-- Large downloads are slow on Windows and may show symlink warnings. Recommended: run on Linux with CUDA for large GPU-backed models.
-- To enable q4 quantized loads: install `bitsandbytes` on a Linux/CUDA host and ensure `transformers` is up-to-date.
-- For faster HF downloads on some systems, consider installing `hf_xet` (optional).
-- To clean a partial download remove the HF cache path (check `HF_HOME` or default `~/.cache/huggingface`) and retry `/pull`.
-
-Development notes
-
-- The server records `model_meta[model]` with keys like `local_path`, `size_bytes`, `preferred_quantized`, `load_duration_ns`, and `backend`. The `/models` and `/status` endpoints expose a subset of these for convenience.
-
-Security
-
-- This server downloads model artifacts from Hugging Face Hub when `/pull` is called — ensure you trust the model repository and have appropriate network and disk policies.
-
-Want me to test it?
-
-- I can start the server locally and run a test `/pull` for a small model and then a `/chat` to verify the end-to-end path. Ask me to run that test and I'll proceed.
-Here’s how I’d build it — **single server, dynamic model loading, GPU-optimized, beats Ollama**:
-
----
-
-### ✅ **Tech Stack**
-
-- **Python** (fastest for this)
-- **vLLM** (for max GPU performance)
-- **FastAPI** (for clean API)
-- **Hugging Face Transformers** (for fallback/CPUs)
-- **CUDA + PyTorch**
-
----
-
-### 📁 `app.py`
-
-```python
-import gc
-import torch
-from fastapi import FastAPI
-from pydantic import BaseModel
-from vllm import LLM, SamplingParams
-from typing import Optional
-
-app = FastAPI()
-
-# Global state
-current_model: Optional[LLM] = None
-current_model_name: Optional[str] = None
-
-class ChatRequest(BaseModel):
-    model: str  # e.g., "Qwen/Qwen2-72B-Chat"
-    messages: list[dict]
-    max_tokens: int = 512
-    temperature: float = 0.7
-
-def load_model(model_name: str):
-    global current_model, current_model_name
-    # Unload current model
-    if current_model:
-        del current_model
-        torch.cuda.empty_cache()
-        gc.collect()
-
-    print(f"Loading model: {model_name}...")
-    current_model = LLM(
-        model=model_name,
-        tensor_parallel_size=torch.cuda.device_count(),
-        dtype="bfloat16",
-        trust_remote_code=True,
-        max_model_len=32768,  # adjust for your GPU
-    )
-    current_model_name = model_name
-    print(f"✅ Model loaded: {model_name}")
-
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    model_name = request.model
-
-    # Load model if not loaded or different
-    if current_model_name != model_name:
-        load_model(model_name)
-
-    # Format messages for vLLM (same as OpenAI)
-    prompt = ""
-    for msg in request.messages:
-        if msg["role"] == "system":
-            prompt += f"System: {msg['content']}\n"
-        elif msg["role"] == "user":
-            prompt += f"User: {msg['content']}\n"
-        elif msg["role"] == "assistant":
-            prompt += f"Assistant: {msg['content']}\n"
-    prompt += "Assistant: "
-
-    # Generate
-    sampling_params = SamplingParams(
-        temperature=request.temperature,
-        max_tokens=request.max_tokens,
-    )
-    outputs = current_model.generate([prompt], sampling_params)
-
-    return {
-        "response": outputs[0].outputs[0].text.strip(),
-        "model": model_name
-    }
-
-@app.get("/models")
-async def list_models():
-    return {"models": ["Qwen/Qwen2-72B-Chat", "meta-llama/Meta-Llama-3-70B-Instruct"]}
-
-# Start server: uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
----
-
-### 🚀 Run It
+**Example:**
 
 ```bash
-pip install fastapi vllm torch transformers uvicorn
-uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
-### 📥 Example Request
-
-```bash
-curl -X POST http://localhost:8000/chat \
+# Pull and initialize small model
+curl -X POST http://localhost:8005/pull \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "Qwen/Qwen2-72B-Chat",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "max_tokens": 100
-  }'
+  -d '{"model":"gpt2","init":true}'
+
+# Pull large model with forced q4
+curl -X POST http://localhost:8005/pull \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Qwen/Qwen3-Omni-30B-A3B-Instruct","quantize":"q4","init":true}'
 ```
 
 ---
 
-### ✅ Why This Beats Ollama
+### POST /chat
 
-- **vLLM** = faster than Ollama’s llama.cpp backend
-- **Single server**, no port chaos
-- **Dynamic loading** (on first use)
-- **Full GPU utilization**
-- **OpenAI-compatible output**
+**Generate text from a loaded model**
 
-> ⚠️ First load is slow (model download + init), but after that — blazing.
+**Request body:**
 
-Let me know if you want **streaming**, **GPU memory monitoring**, or **model caching** added.
+```json
+{
+  "model": "gpt2",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant"},
+    {"role": "user", "content": "Hello!"}
+  ],
+  "max_tokens": 512,                    // optional, default: 512
+  "temperature": 0.7                    // optional, default: 0.7
+}
+```
+
+**Response (Ollama-compatible):**
+
+```json
+{
+  "model": "gpt2",
+  "created_at": "2025-12-13T18:38:39.023109Z",
+  "message": {
+    "role": "assistant",
+    "content": "Hello! How can I help you today?"
+  },
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 5656717800,         // nanoseconds
+  "load_duration": 871150500,
+  "prompt_eval_count": 19,
+  "eval_count": 531,
+  "eval_duration": 4785567300
+}
+```
 
 ---
 
-Getting started (PowerShell)
+### GET /models
 
-1) Create and activate a virtual environment (optional but recommended):
+**List all available models**
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
+**Response:**
+
+```json
+{
+  "models": [
+    {
+      "model": "gpt2",
+      "loaded": true,
+      "backend": "transformers_pipeline",
+      "size_bytes": 548118077,
+      "local_path": "C:\\Users\\...\\models--gpt2\\snapshots\\...",
+      "load_duration": 871150500
+    },
+    {
+      "model": "Qwen/Qwen3-0.6B",
+      "loaded": false,
+      "size_bytes": 1519182405,
+      "local_path": "C:\\Users\\...\\models--Qwen--Qwen3-0.6B"
+    }
+  ]
+}
 ```
 
-2) Install dependencies:
+---
 
-```powershell
-pip install -r requirements.txt
+### GET /jobs
+
+**List all pull jobs**
+
+**Response:**
+
+```json
+{
+  "jobs": [
+    {
+      "id": "uuid",
+      "model": "gpt2",
+      "status": "succeeded",              // running|succeeded|failed
+      "created_at": "2025-12-13T18:38:31Z",
+      "finished_at": "2025-12-13T18:38:33Z",
+      "local_path": "C:\\Users\\...\\models--gpt2\\...",
+      "preferred_quantized": false
+    }
+  ]
+}
 ```
 
-3) Run the server:
+---
 
-```powershell
-uvicorn app:app --host 0.0.0.0 --port 8000
+### GET /jobs/{job_id}
+
+**Get specific job status**
+
+Poll this endpoint to track download progress after calling `/pull`.
+
+---
+
+### GET /status
+
+**Server runtime diagnostics**
+
+**Response:**
+
+```json
+{
+  "vllm_available": false,
+  "transformers_available": true,
+  "bitsandbytes_available": true,
+  "hf_hub_available": true,
+  "cache_size": 1,
+  "max_cache": 2,
+  "cached_models": ["gpt2"],
+  "failed_loads": {},
+  "config": {
+    "max_cache_models": 2,
+    "cooldown_seconds": 300,
+    "q4_threshold_bytes": 14000000000
+  }
+}
 ```
 
-4) Example request:
+---
 
-```powershell
-curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"model": "Qwen/Qwen2-72B-Chat", "messages": [{"role":"user","content":"Hello"}], "max_tokens":100}'
+### GET /diag
+
+**CUDA/PyTorch diagnostics**
+
+**Response:**
+
+```json
+{
+  "torch_installed": true,
+  "torch_version": "2.9.1+cu126",
+  "cuda_available": true,
+  "cuda_count": 1,
+  "cuda_devices": [
+    {"index": 0, "name": "NVIDIA GeForce RTX 4090 Laptop GPU"}
+  ]
+}
 ```
 
-Notes:
+## Troubleshooting
 
-- vLLM and large model usage typically target Linux GPU environments; running on Windows may need additional setup.
-- First model load can be slow while the model is downloaded/initialized.
+### Common Issues
 
-Cache and cooldown
+| Issue | Solution |
+|-------|----------|
+| **"Model not available locally"** | Call `/pull` first to download the model |
+| **CUDA OOM errors** | 1. Reduce `MAX_CACHE_MODELS` to `1`<br>2. Use q4 quantization<br>3. Restart server to clear GPU<br>4. Check `nvidia-smi` for other GPU processes |
+| **"requires accelerate" error** | `pip install accelerate` |
+| **CPU-only despite having GPU** | Run `.\setup_cuda_pytorch.ps1` to install CUDA PyTorch |
+| **Slow inference** | Ensure CUDA is enabled (`/diag` should show `cuda_available: true`) |
+| **Download fails/hangs** | Clear HF cache and retry: `rm -r ~/.cache/huggingface/hub/models--<model-name>` |
 
-- The server keeps up to `MAX_CACHE_MODELS` models in an in-memory LRU cache (default 2).
-- If a model load fails, further attempts are blocked for `MODEL_LOAD_COOLDOWN` seconds (default 300).
-You can override these with environment variables before starting the server:
+### CUDA OOM Deep Dive
 
-```powershell
-$env:MAX_CACHE_MODELS = "3"
-$env:MODEL_LOAD_COOLDOWN = "600"
-uvicorn app:app --host 0.0.0.0 --port 8000
+The server automatically sets `PYTORCH_ALLOC_CONF=expandable_segments:True` to reduce memory fragmentation. If you still hit OOM:
+
+1. **Check GPU memory:**
+
+   ```powershell
+   nvidia-smi
+   ```
+
+2. **Reduce cache size:**
+
+   ```powershell
+   $env:MAX_CACHE_MODELS = "1"
+   ```
+
+3. **Force quantization:**
+
+   ```bash
+   # Pull with explicit q4
+   curl -X POST http://localhost:8005/pull \
+     -H "Content-Type: application/json" \
+     -d '{"model":"your/model","quantize":"q4","init":true}'
+   ```
+
+4. **Clear GPU memory completely:**
+
+   ```powershell
+   Get-Process python | Stop-Process -Force
+   # Then restart server
+   ```
+
+### Model Compatibility
+
+**Tested and working:**
+
+- ✅ GPT-2 (548MB)
+- ✅ Qwen/Qwen3-0.6B (1.5GB)
+- ✅ facebook/opt-1.3b (5.3GB)
+- ✅ Qwen/Qwen3-Omni-30B-A3B-Instruct (70GB with q4)
+
+**Known limitations:**
+
+- MoE models require `trust_remote_code=True` (security consideration)
+- Very large models (>70GB) may need CPU offloading even with q4
+- vLLM backend requires Linux + CUDA (Windows uses transformers fallback)
+
+## Architecture
+
+### Request Flow
+
+```
+1. Client → POST /pull → Background job starts
+
+---
+
+## Production Deployment
+
+### Docker
+
+```dockerfile
+# See Dockerfile for complete setup
+docker build -t ai-server .
+docker run -p 8005:8005 --gpus all ai-server
 ```
 
-Model storage and download locations
+### Performance Tuning
 
-- Transformers downloads models to the Hugging Face cache on the host (by default `~/.cache/huggingface/transformers` on Linux, or `%USERPROFILE%\.cache\huggingface\transformers` on Windows). The `pipeline`/`from_pretrained` call performed by the server will download weights to that cache when needed.
-- vLLM model handling typically uses HF cache as well or vLLM-specific model resolution; when you call the `/pull` endpoint or load a model it will download weights to the local cache used by the backend.
+**For single large model (70B+):**
+```powershell
+$env:MAX_CACHE_MODELS = "1"           # Only one model in memory
+$env:MODEL_Q4_THRESHOLD_BYTES = "0"   # Always use q4
+python -m uvicorn app:app --host 0.0.0.0 --port 8005
+```
 
-Endpoints added
+**For multiple small models:**
+```powershell
+$env:MAX_CACHE_MODELS = "5"           # Keep 5 models cached
+$env:MODEL_Q4_THRESHOLD_BYTES = "30000000000"  # Only q4 for >30GB
+python -m uvicorn app:app --host 0.0.0.0 --port 8005
+```
 
-- `GET /models` — returns `known_models` (example list) and `cached_models` currently in memory.
-- `POST /pull` — body: `{"model": "<model-id>"}` — force-download and initialize a model into the in-memory cache.
-- `POST /chat` — chat endpoint (will use vLLM if available otherwise transformers pipeline fallback).
-- `GET /status` — runtime status including which backends are available, cache contents and recent failed loads.
+### Monitoring
 
-Notes and caveats
+- **Health check**: `GET /status`
+- **GPU usage**: `nvidia-smi` or `nvidia-smi dmon`
+- **Job tracking**: `GET /jobs`
+- **Diagnostics**: `GET /diag`
 
-- Downloading large models requires disk space and may take a long time. For large GPU-optimized models, run on Linux with CUDA-enabled drivers.
-- The server prefers `vLLM` if available; if `vLLM` fails to instantiate a model the server will try a `transformers` pipeline fallback and will record failures in `/status`.
+---
+
+## Security
+
+ **Important**: This server downloads and executes model code from Hugging Face Hub.
+
+- MoE/custom models use `trust_remote_code=True` (executes model repo code)
+- Only pull models from trusted sources
+- Review model repos before pulling
+- Consider network isolation for production deployments
+- HF cache location: `~/.cache/huggingface/hub` (or `HF_HOME`)
+
+---
+
+## Development
+
+### Project Structure
+```
+ai-server-py/
+ app.py                    # Main FastAPI server
+ requirements.txt          # Python dependencies
+ setup_cuda_pytorch.ps1    # CUDA setup helper (Windows)
+ scripts/
+    dai-cazzo.ps1        # Test script
+ .specs/                   # Feature specs and plans
+```
+
+### Key Dependencies
+- `fastapi` + `uvicorn`: API server
+- `torch` (CUDA): GPU acceleration
+- `transformers`: Model loading
+- `bitsandbytes`: 4-bit quantization
+- `accelerate`: Device mapping for large models
+- `vllm` (optional): High-performance inference
+- `huggingface_hub`: Model downloads
+
+### Running Tests
+
+```powershell
+# Start server in one terminal
+python -m uvicorn app:app --host 0.0.0.0 --port 8005
+
+# In another terminal
+.\scripts\dai-cazzo.ps1  # Runs diagnostic + pull + chat test
+```
+
+---
+
+## Comparison: This Server vs Ollama
+
+| Feature | This Server | Ollama |
+|---------|-------------|--------|
+| **Backend** | vLLM  transformers | llama.cpp |
+| **GPU optimization** | Native CUDA + quantization | Metal/CUDA via llama.cpp |
+| **Model format** | Native HF (safetensors) | GGUF conversion required |
+| **Auto-download** | Explicit `/pull` only | Auto-downloads on first use |
+| **Quantization** | Auto 4-bit for large models | GGUF quant levels |
+| **MoE support** |  (trust_remote_code) | Limited |
+| **Job tracking** |  Background jobs + status |  |
+| **Multi-model cache** |  Configurable LRU |  |
+| **API format** | Ollama-compatible | Native Ollama |
+
+**Use this server if:**
+- You want native HF model support (no GGUF conversion)
+- You need explicit control over downloads
+- You want automatic quantization for large models
+- You prefer Python/FastAPI stack
+
+**Use Ollama if:**
+- You need cross-platform simplicity
+- You prefer GGUF ecosystem
+- You want one-command setup
+
+---
+
+## License
+
+MIT
+
+---
+
+## Contributing
+
+Issues and PRs welcome! See `.specs/` for feature documentation and implementation plans.
