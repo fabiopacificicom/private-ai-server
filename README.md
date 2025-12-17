@@ -22,6 +22,7 @@ pip install -r requirements.txt
 2. Run server:
 
 ```powershell
+. .\.venv\Scripts\Activate.ps1
 uvicorn app:app --host 0.0.0.0 --port 8005
 ```
 
@@ -30,6 +31,7 @@ Environment variables
 - `MAX_CACHE_MODELS` (default `2`): max number of model instances kept in memory cache (LRU evict).
 - `MODEL_LOAD_COOLDOWN` (default `300`): seconds to cooldown after a failed model load attempt.
 - `MODEL_Q4_THRESHOLD_BYTES` (default for `/pull` auto: ~14e9): bytes threshold above which `quantize:auto` will prefer q4.
+- `PYTORCH_ALLOC_CONF` (default `expandable_segments:True`): PyTorch CUDA allocator configuration to reduce memory fragmentation and OOM errors. Set automatically by the server.
 
 Principles and behaviour
 
@@ -141,6 +143,12 @@ Behavioral differences vs Ollama
 Troubleshooting and tips
 
 - If you see: `Model 'X' not available locally. Use the /pull endpoint...` — call `/pull` first.
+- **CUDA OOM errors**: The server sets `PYTORCH_ALLOC_CONF=expandable_segments:True` to reduce fragmentation. If you still get OOM:
+  - Reduce `MAX_CACHE_MODELS` to 1 to keep fewer models in memory.
+  - Use smaller models or quantized (q4) variants.
+  - Restart the server to clear GPU memory completely.
+  - Check GPU memory usage with `nvidia-smi` and close other GPU-using processes.
+- **Missing `accelerate` error**: Install `accelerate` with `pip install accelerate` for GPU `device_map` support.
 - Large downloads are slow on Windows and may show symlink warnings. Recommended: run on Linux with CUDA for large GPU-backed models.
 - To enable q4 quantized loads: install `bitsandbytes` on a Linux/CUDA host and ensure `transformers` is up-to-date.
 - For faster HF downloads on some systems, consider installing `hf_xet` (optional).

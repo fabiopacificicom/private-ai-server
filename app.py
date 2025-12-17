@@ -9,6 +9,9 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from collections import OrderedDict
 
+# Set PyTorch CUDA allocator config to reduce fragmentation and OOM errors
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
 try:
     import torch
 except Exception:
@@ -95,8 +98,13 @@ def _evict_lru_if_needed():
         name, mdl = model_cache.popitem(last=False)
         try:
             del mdl
-            if torch is not None and hasattr(torch.cuda, "empty_cache"):
-                torch.cuda.empty_cache()
+            gc.collect()
+            if torch is not None and torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                except Exception:
+                    pass
         except Exception:
             log.exception("Error while evicting model %s", name)
         log.info("Evicted LRU model: %s", name)
@@ -121,6 +129,15 @@ def load_model(model_name: str):
     """
     global current_model, current_model_name
 
+    # Aggressive GPU memory cleanup before loading to reduce OOM errors
+    if torch is not None and torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            gc.collect()
+        except Exception:
+            log.debug("GPU memory cleanup failed (non-fatal)")
+
     # If model is already current, nothing to do.
     if current_model_name == model_name and current_model is not None:
         return
@@ -140,6 +157,27 @@ def load_model(model_name: str):
             return
         except Exception:
             log.exception("Error reusing cached model %s", model_name)
+
+    # Log GPU / torch diagnostics to help determine device placement
+    try:
+        if torch is not None:
+            try:
+                torch_info = {
+                    "torch_version": getattr(torch, "__version__", None),
+                    "cuda_available": torch.cuda.is_available(),
+                    "cuda_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+                    "cuda_device_name": None,
+                }
+                if torch.cuda.is_available():
+                    try:
+                        torch_info["cuda_device_name"] = torch.cuda.get_device_name(0)
+                    except Exception:
+                        torch_info["cuda_device_name"] = None
+                log.info("Torch diagnostics: %s", torch_info)
+            except Exception:
+                log.exception("Error while collecting torch diagnostics")
+    except Exception:
+        pass
 
     # Prefer vLLM backend if available and suitable
     backend_used = None
@@ -226,6 +264,7 @@ def load_model(model_name: str):
         log.info("Loading model with transformers pipeline: %s", model_name)
         # choose device: 0 for first CUDA GPU, -1 for CPU
         device = 0 if (torch is not None and torch.cuda.is_available()) else -1
+        log.info("Transformers selected device=%s (0=gpu, -1=cpu). torch.cuda.is_available=%s", device, (torch is not None and torch.cuda.is_available()))
 
         start_ns = time.time_ns()
         quantized = False
@@ -269,7 +308,63 @@ def load_model(model_name: str):
         # If not quantized, use standard pipeline which will place model on CPU or specified device
         if not quantized:
             # Use local files only to avoid remote downloads during load
-            pipe = pipeline("text-generation", model=local_path or model_name, device=device, trust_remote_code=True)
+            # Prefer to load the model onto GPU(s) when available by using device_map='auto'
+            if device >= 0 and torch is not None and torch.cuda.is_available():
+                try:
+                    log.info("Attempting GPU-backed load via from_pretrained with device_map='auto' for %s", model_name)
+                    torch_dtype = torch.float16
+                    model = AutoModelForCausalLM.from_pretrained(
+                        local_path or model_name,
+                        device_map="auto",
+                        torch_dtype=torch_dtype,
+                        trust_remote_code=True,
+                        local_files_only=True,
+                    )
+                    tokenizer = AutoTokenizer.from_pretrained(local_path or model_name, use_fast=False, trust_remote_code=True, local_files_only=True)
+                    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+                except ValueError as ve:
+                    # Some model repos (Mixture-of-Experts / custom Qwen variants) expose
+                    # a configuration class that does not map to transformers' AutoModelForCausalLM.
+                    # In that case, fall back to using the pipeline with trust_remote_code=True
+                    # which will import model-specific code from the repo. Log a clear warning
+                    # because `trust_remote_code=True` runs repository code (security implication).
+                    msg = str(ve)
+                    if "Unrecognized configuration class" in msg or "MoeConfig" in msg or "Qwen3OmniMoeConfig" in msg:
+                        log.warning(
+                            "Model configuration %s not supported by AutoModelForCausalLM; falling back to pipeline with trust_remote_code=True. "
+                            "This will execute model repo code; ensure you trust the model source.",
+                            model_name,
+                        )
+                        # mark in metadata that this model required pipeline-only loading
+                        model_meta[model_name] = {**model_meta.get(model_name, {}), "pipeline_only": True}
+                        try:
+                            # For MoE/custom models, try to apply quantization if should_q4 is True
+                            model_kwargs = {"trust_remote_code": True, "local_files_only": True}
+                            if should_q4:
+                                log.info("Applying 4-bit quantization to MoE/custom model %s", model_name)
+                                bnb_config = BitsAndBytesConfig(
+                                    load_in_4bit=True,
+                                    bnb_4bit_use_double_quant=True,
+                                    bnb_4bit_quant_type="nf4",
+                                    bnb_4bit_compute_dtype=torch.float16,
+                                )
+                                model_kwargs["quantization_config"] = bnb_config
+                                model_kwargs["device_map"] = "auto"
+                                quantized = True
+                            
+                            pipe = pipeline("text-generation", model=local_path or model_name, model_kwargs=model_kwargs, device=device if not should_q4 else None)
+                        except Exception:
+                            log.exception("Pipeline fallback (trust_remote_code) failed for %s", model_name)
+                            raise
+                    else:
+                        # re-raise other ValueErrors so they're handled by outer except
+                        raise
+                except Exception:
+                    log.exception("GPU-backed from_pretrained load failed for %s, falling back to pipeline with device param", model_name)
+                    # Fallback: let pipeline manage device placement (device param)
+                    pipe = pipeline("text-generation", model=local_path or model_name, device=device, trust_remote_code=True, local_files_only=True)
+            else:
+                pipe = pipeline("text-generation", model=local_path or model_name, device=device, trust_remote_code=True, local_files_only=True)
 
         load_duration_ns = time.time_ns() - start_ns
         backend_used = "transformers_pipeline"
@@ -405,14 +500,76 @@ async def chat(request: ChatRequest):
         try:
             gen_start = time.time_ns()
             # First, try chat-style invocation: pass the messages list directly to the pipeline
-            # Some remote (chat-capable) pipelines support being called with a messages list
+            # Some chat-capable pipelines support being called with a messages list
+            result = None
             try:
-                print(request.messages)
                 result = pipe(request.messages, max_new_tokens=request.max_tokens, temperature=request.temperature, do_sample=(request.temperature > 0.0))
-                print(result)
-            except Exception:
+            except Exception as e_messages:
+                log.debug("pipeline(messages) failed: %s", e_messages)
                 # Fallback to the legacy prompt string for pipelines that expect a single string
-                result = pipe(prompt, max_new_tokens=request.max_tokens, temperature=request.temperature, do_sample=(request.temperature > 0.0))
+                try:
+                    result = pipe(prompt, max_new_tokens=request.max_tokens, temperature=request.temperature, do_sample=(request.temperature > 0.0))
+                except Exception as e_prompt:
+                    log.debug("pipeline(prompt) also failed: %s", e_prompt)
+                    # As a last resort, attempt direct model.generate using tokenizer + model
+                    try:
+                        model_obj = getattr(pipe, "model", None)
+                        tokenizer = getattr(pipe, "tokenizer", None)
+                        if model_obj is None or tokenizer is None:
+                            raise RuntimeError("Pipeline does not expose model/tokenizer for direct generate fallback")
+
+                        # Tokenize prompt
+                        inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
+                        input_ids = inputs.get("input_ids")
+                        attention_mask = inputs.get("attention_mask")
+
+                        # Move model and tensors to GPU if available
+                        model_device = None
+                        try:
+                            next_param = next(model_obj.parameters())
+                            model_device = next_param.device
+                        except Exception:
+                            model_device = None
+
+                        if torch is not None and torch.cuda.is_available():
+                            try:
+                                model_obj.to("cuda")
+                                model_device = torch.device("cuda")
+                            except Exception:
+                                log.debug("Could not move model to CUDA; continuing on CPU")
+
+                        if input_ids is not None and model_device is not None:
+                            try:
+                                input_ids = input_ids.to(model_device)
+                                if attention_mask is not None:
+                                    attention_mask = attention_mask.to(model_device)
+                            except Exception:
+                                log.debug("Failed to move input tensors to model device; proceeding without explicit move")
+
+                        gen_kwargs = {"max_new_tokens": request.max_tokens}
+                        if request.temperature and request.temperature > 0.0:
+                            gen_kwargs.update({"do_sample": True, "temperature": request.temperature})
+                        else:
+                            gen_kwargs.update({"do_sample": False})
+
+                        # Call model.generate directly
+                        outputs_ids = model_obj.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
+
+                        # Extract generated portion (tokens after input length)
+                        gen_text = ""
+                        try:
+                            gen_tokens = outputs_ids[:, input_ids.shape[1]:]
+                            gen_texts = tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)
+                            gen_text = gen_texts[0] if isinstance(gen_texts, list) and len(gen_texts) > 0 else ""
+                        except Exception:
+                            # Fallback: decode full output
+                            gen_text = tokenizer.decode(outputs_ids[0], skip_special_tokens=True)
+
+                        # Build a normalized pipeline-style result
+                        result = [{"generated_text": gen_text}]
+                    except Exception:
+                        log.exception("Direct model.generate fallback failed for model %s", model_name)
+                        raise
 
             gen_duration = time.time_ns() - gen_start
 
@@ -532,7 +689,7 @@ async def list_models():
 
 
 @app.post("/pull")
-async def pull_model(payload: Dict[str, str]):
+async def pull_model(payload: Dict[str, Any]):
     """Request body: {"model":"<model-id>"}
 
     This endpoint forces download/initialization of the model and caches it.
@@ -543,7 +700,12 @@ async def pull_model(payload: Dict[str, str]):
 
     # Optional: user can request quantization preference: 'auto'|'q4'|'fp32' etc.
     quant = payload.get("quantize", "auto")
-    init = bool(payload.get("init", False))
+    # Accept init as boolean or string (e.g. "true"), coerce to bool
+    raw_init = payload.get("init", False)
+    if isinstance(raw_init, str):
+        init = raw_init.lower() in ("1", "true", "yes", "y")
+    else:
+        init = bool(raw_init)
 
     if not hf_hub_available or snapshot_download is None:
         raise HTTPException(status_code=500, detail="HF Hub not available on this host; cannot pull models")
@@ -585,6 +747,43 @@ async def status():
         "max_cache_models": MAX_CACHE_MODELS,
         "cooldown_seconds": COOLDOWN_SECONDS,
     }
+
+
+@app.get("/diag")
+async def diag():
+    """Return torch / CUDA diagnostics to help with GPU troubleshooting."""
+    info = {
+        "torch_installed": torch is not None,
+        "torch_version": None,
+        "cuda_available": False,
+        "cuda_count": 0,
+        "cuda_devices": [],
+    }
+    try:
+        if torch is not None:
+            info["torch_version"] = getattr(torch, "__version__", None)
+            try:
+                info["cuda_available"] = torch.cuda.is_available()
+            except Exception:
+                info["cuda_available"] = False
+            try:
+                info["cuda_count"] = torch.cuda.device_count() if info["cuda_available"] else 0
+            except Exception:
+                info["cuda_count"] = 0
+            try:
+                devices = []
+                for i in range(info["cuda_count"]):
+                    try:
+                        devices.append({"index": i, "name": torch.cuda.get_device_name(i)})
+                    except Exception:
+                        devices.append({"index": i, "name": None})
+                info["cuda_devices"] = devices
+            except Exception:
+                info["cuda_devices"] = []
+    except Exception:
+        log.exception("Error collecting diag info")
+
+    return info
 
 
 async def _background_pull(job_id: str, model_name: str, quant: str, init: bool):
