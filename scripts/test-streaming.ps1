@@ -2,6 +2,7 @@
 # Tests both health endpoint and streaming chat functionality
 
 $baseUrl = "http://localhost:8005"
+$requestTimeout = 30  # Timeout in seconds for API requests
 
 Write-Host "=== AI Server Phase 1 Feature Tests ===" -ForegroundColor Cyan
 Write-Host ""
@@ -39,7 +40,7 @@ try {
     
     # Note: This will fail if model not loaded, which is expected in test environment
     Write-Host "   Attempting non-streaming request..."
-    $chatResponse = Invoke-RestMethod -Uri "$baseUrl/chat" -Method Post -Body $chatBody -ContentType "application/json" -TimeoutSec 30 -ErrorAction SilentlyContinue
+    $chatResponse = Invoke-RestMethod -Uri "$baseUrl/chat" -Method Post -Body $chatBody -ContentType "application/json" -TimeoutSec $requestTimeout -ErrorAction SilentlyContinue
     
     if ($chatResponse) {
         Write-Host "✅ Non-streaming chat works" -ForegroundColor Green
@@ -74,7 +75,7 @@ try {
     Write-Host "   Attempting streaming request..."
     # Note: PowerShell's Invoke-RestMethod doesn't handle SSE well
     # Using Invoke-WebRequest to get raw response
-    $streamResponse = Invoke-WebRequest -Uri "$baseUrl/chat" -Method Post -Body $streamBody -ContentType "application/json" -TimeoutSec 30 -ErrorAction SilentlyContinue
+    $streamResponse = Invoke-WebRequest -Uri "$baseUrl/chat" -Method Post -Body $streamBody -ContentType "application/json" -TimeoutSec $requestTimeout -ErrorAction SilentlyContinue
     
     if ($streamResponse) {
         Write-Host "✅ Streaming endpoint responds" -ForegroundColor Green

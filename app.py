@@ -79,6 +79,7 @@ model_meta: Dict[str, Dict[str, Any]] = {}
 MAX_CACHE_MODELS = int(os.getenv("MAX_CACHE_MODELS", "2"))
 COOLDOWN_SECONDS = int(os.getenv("MODEL_LOAD_COOLDOWN", "300"))
 MAX_CONCURRENT_PULLS = int(os.getenv("MAX_CONCURRENT_PULLS", "2"))
+STREAMING_THREAD_TIMEOUT = int(os.getenv("STREAMING_THREAD_TIMEOUT", "30"))  # Timeout for streaming generation threads
 
 # Job registry for background pulls (job_id -> job metadata)
 jobs: Dict[str, Dict[str, Any]] = {}
@@ -433,7 +434,7 @@ def _extract_text_from_pipeline_result(val: Any) -> str:
             return ""
 
 
-async def _stream_chat_response(model_name: str, messages: List[Dict[str, str]], max_tokens: int = 256, temperature: float = 0.7):
+async def _stream_chat_response(model_name: str, messages: List[Dict[str, str]], max_tokens: int = 512, temperature: float = 0.7):
     """Generate streaming chat response chunks in SSE format.
     
     Supports both vLLM and transformers backends with TextIteratorStreamer.
@@ -534,11 +535,12 @@ async def _stream_chat_response(model_name: str, messages: List[Dict[str, str]],
             # Prepare generation function to run in thread
             def generate():
                 try:
-                    # Try messages-based generation first
+                    # Try messages-based generation first (for chat-capable models)
                     try:
                         pipe(messages, max_new_tokens=max_tokens, temperature=temperature, do_sample=(temperature > 0.0), streamer=streamer)
-                    except Exception:
-                        # Fallback to prompt-based generation
+                    except (TypeError, AttributeError, ValueError) as e_messages:
+                        # Fallback to prompt-based generation for models that don't support messages format
+                        log.debug("Messages-based generation failed (%s), falling back to prompt", type(e_messages).__name__)
                         inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
                         input_ids = inputs.get("input_ids")
                         
@@ -578,7 +580,7 @@ async def _stream_chat_response(model_name: str, messages: List[Dict[str, str]],
                 return
             
             # Wait for thread to complete
-            thread.join(timeout=30)
+            thread.join(timeout=STREAMING_THREAD_TIMEOUT)
             
             # Final chunk
             final_chunk = {"delta": {}, "done": True}
@@ -1076,8 +1078,10 @@ async def health():
     if torch is not None and torch.cuda.is_available():
         try:
             gpu_status = "available"
-            gpu_memory_allocated_mb = torch.cuda.memory_allocated(0) / (1024**2)
-            gpu_memory_reserved_mb = torch.cuda.memory_reserved(0) / (1024**2)
+            # Use current device or default to 0 if not set
+            device_idx = torch.cuda.current_device() if hasattr(torch.cuda, 'current_device') else 0
+            gpu_memory_allocated_mb = torch.cuda.memory_allocated(device_idx) / (1024**2)
+            gpu_memory_reserved_mb = torch.cuda.memory_reserved(device_idx) / (1024**2)
         except Exception:
             gpu_status = "error"
             log.exception("Error collecting GPU memory stats")
