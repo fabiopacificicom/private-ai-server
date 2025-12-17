@@ -493,6 +493,47 @@ MIT
 
 ---
 
+## Roadmap
+
+**Current Version**: v0.9 (MVP Complete)
+
+See [`.specs/ROADMAP.md`](.specs/ROADMAP.md) for detailed feature roadmap and timeline.
+
+**Next Release (v1.0)**: Production-Ready
+- 🔄 Streaming responses (SSE)
+- ❤️ Health check endpoint
+- ⏱️ Request timeouts
+- 📊 Download progress tracking
+- 💾 Persistent job storage (SQLite)
+- 📝 Improved error messages
+
+**Future Releases**:
+- v1.5: Advanced features (sessions, sampling params, model aliases)
+- v2.0: Production hardening (auth, monitoring, scaling)
+- v2.5: Ecosystem integration (OpenAI API, LangChain)
+- v3.0: Performance optimizations (batching, speculative decoding)
+
+---
+
+## Documentation
+
+### For Users
+- [README.md](README.md) - Getting started, API reference, troubleshooting
+- [.specs/ROADMAP.md](.specs/ROADMAP.md) - Feature roadmap and timeline
+
+### For Developers
+- [.github/instructions/coder-guidelines.instructions.md](.github/instructions/coder-guidelines.instructions.md) - Coding standards and patterns
+- [.github/copilot-instructions.md](.github/copilot-instructions.md) - AI agent onboarding guide
+- [.specs/SERVER-REVIEW.md](.specs/SERVER-REVIEW.md) - Architecture review and recommendations
+- [.specs/plans/phase1-implementation.md](.specs/plans/phase1-implementation.md) - Detailed v1.0 implementation plan
+
+---
+
 ## Contributing
 
-Issues and PRs welcome! See `.specs/` for feature documentation and implementation plans.
+Issues and PRs welcome! See documentation above for development guidelines and roadmap.
+
+**Quick Links**:
+- [Roadmap](.specs/ROADMAP.md) - What's planned
+- [Coder Guidelines](.github/instructions/coder-guidelines.instructions.md) - How to code
+- [Phase 1 Plan](.specs/plans/phase1-implementation.md) - Next steps
