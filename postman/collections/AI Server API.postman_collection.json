@@ -1,0 +1,482 @@
+{
+  "info": {
+    "_postman_id": "d89f2920-b750-4382-b920-3ef1f424b13f",
+    "name": "AI Server API",
+    "description": "API collection for the FastAPI AI Server project with endpoints for chat and model management",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Chat",
+      "item": [
+        {
+          "name": "Chat",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "id": "abe23d88-25b5-4155-917d-f6ba6d8d0a7f",
+                "exec": [
+                  "// 1. Response status code is 200",
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "// 2. Response time is under 5000ms",
+                  "pm.test(\"Response time is under 5000ms\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "",
+                  "// Parse response JSON for subsequent tests",
+                  "const jsonData = pm.response.json();",
+                  "",
+                  "// 3. Response has the correct JSON structure with required fields",
+                  "pm.test(\"Response has required fields (id, object, created, model, choices, usage)\", function () {",
+                  "    pm.expect(jsonData).to.have.property(\"id\");",
+                  "    pm.expect(jsonData).to.have.property(\"object\");",
+                  "    pm.expect(jsonData).to.have.property(\"created\");",
+                  "    pm.expect(jsonData).to.have.property(\"model\");",
+                  "    pm.expect(jsonData).to.have.property(\"choices\");",
+                  "    pm.expect(jsonData).to.have.property(\"usage\");",
+                  "});",
+                  "",
+                  "// 4. The choices array exists and has at least one element",
+                  "pm.test(\"Choices array exists and has at least one element\", function () {",
+                  "    pm.expect(jsonData.choices).to.be.an(\"array\");",
+                  "    pm.expect(jsonData.choices.length).to.be.at.least(1);",
+                  "});",
+                  "",
+                  "// 5. The message object contains role and content fields",
+                  "pm.test(\"Message object contains role and content fields\", function () {",
+                  "    jsonData.choices.forEach(function (choice, index) {",
+                  "        pm.expect(choice).to.have.property(\"message\", \"Choice at index \" + index + \" should have message\");",
+                  "        pm.expect(choice.message).to.have.property(\"role\", \"Message at index \" + index + \" should have role\");",
+                  "        pm.expect(choice.message).to.have.property(\"content\", \"Message at index \" + index + \" should have content\");",
+                  "    });",
+                  "});",
+                  "",
+                  "// 6. The usage object contains prompt_tokens, completion_tokens, and total_tokens",
+                  "pm.test(\"Usage object contains prompt_tokens, completion_tokens, and total_tokens\", function () {",
+                  "    pm.expect(jsonData.usage).to.be.an(\"object\");",
+                  "    pm.expect(jsonData.usage).to.have.property(\"prompt_tokens\");",
+                  "    pm.expect(jsonData.usage).to.have.property(\"completion_tokens\");",
+                  "    pm.expect(jsonData.usage).to.have.property(\"total_tokens\");",
+                  "    pm.expect(jsonData.usage.prompt_tokens).to.be.a(\"number\");",
+                  "    pm.expect(jsonData.usage.completion_tokens).to.be.a(\"number\");",
+                  "    pm.expect(jsonData.usage.total_tokens).to.be.a(\"number\");",
+                  "});",
+                  "",
+                  "// 7. Validate that the model in response matches the requested model",
+                  "pm.test(\"Response model matches requested model\", function () {",
+                  "    const requestBody = JSON.parse(pm.request.body.raw);",
+                  "    const requestedModel = requestBody.model;",
+                  "    pm.expect(jsonData.model).to.include(requestedModel);",
+                  "});",
+                  "",
+                  "// 8. Check that the response content is not empty",
+                  "pm.test(\"Response content is not empty\", function () {",
+                  "    jsonData.choices.forEach(function (choice, index) {",
+                  "        pm.expect(choice.message.content).to.be.a(\"string\");",
+                  "        pm.expect(choice.message.content.trim().length).to.be.above(0, \"Content at index \" + index + \" should not be empty\");",
+                  "    });",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "id": "7abe5dfd-c340-4c93-9ae8-1a1934fdb9df",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"model\": \"Qwen/Qwen3-Omni-30B-A3B-Instruct\",\r\n  \"messages\": [\r\n    { \"role\": \"system\", \"content\": \"You are AI Bot, a super AI assistant.\" },\r\n    { \"role\": \"user\", \"content\": \"Hello, who are you?\" }\r\n  ],\r\n  \"max_tokens\": 150,\r\n  \"temperature\": 0.7\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/chat",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "chat"
+              ]
+            },
+            "description": "Send a chat request to generate a response from the model"
+          },
+          "response": [
+            {
+              "id": "451210f8-efdb-455d-94af-f3340f315c2b",
+              "name": "Successful Chat Response",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"model\": \"llama3.2\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello, how are you?\"\n    }\n  ],\n  \"max_tokens\": 150,\n  \"temperature\": 0.7,\n  \"stream\": false\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/chat",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "chat"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": ""
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"id\": \"chatcmpl-123\",\n  \"object\": \"chat.completion\",\n  \"created\": 1677652288,\n  \"model\": \"llama3.2\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\": \"assistant\",\n        \"content\": \"Hello! I'm doing well, thank you for asking. How can I assist you today?\"\n      },\n      \"finish_reason\": \"stop\"\n    }\n  ],\n  \"usage\": {\n    \"prompt_tokens\": 10,\n    \"completion_tokens\": 20,\n    \"total_tokens\": 30\n  }\n}"
+            },
+            {
+              "id": "20e70b8e-d20b-40db-a0eb-c6f1099cc9b4",
+              "name": "Bad Request - Invalid Input",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"model\": \"llama3.2\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello, how are you?\"\n    }\n  ],\n  \"max_tokens\": 150,\n  \"temperature\": 0.7,\n  \"stream\": false\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/chat",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "chat"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": ""
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"detail\": \"Invalid request format. Please check your input parameters.\"\n}"
+            },
+            {
+              "id": "f74c7665-b4e9-49a2-b0e7-17c891fdad3b",
+              "name": "Server Error",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"model\": \"llama3.2\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello, how are you?\"\n    }\n  ],\n  \"max_tokens\": 150,\n  \"temperature\": 0.7,\n  \"stream\": false\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/chat",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "chat"
+                  ]
+                }
+              },
+              "status": "Internal Server Error",
+              "code": 500,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": ""
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"detail\": \"Internal server error occurred while processing the request.\"\n}"
+            }
+          ]
+        }
+      ],
+      "id": "72c8d1c4-d29a-4941-b9d5-b4ff02deb59a",
+      "description": "Chat endpoint for generating responses"
+    },
+    {
+      "name": "Models",
+      "item": [
+        {
+          "name": "List Models",
+          "event": [
+            {
+              "id": "1b3f311d-31c9-4a21-8a53-4cee286f7dd9",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// 1. Response status code is 200",
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "// 2. Response time is under 3000ms",
+                  "pm.test(\"Response time is under 3000ms\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(3000);",
+                  "});",
+                  "",
+                  "// Parse response JSON for subsequent tests",
+                  "const jsonData = pm.response.json();",
+                  "",
+                  "// 3. Response has the correct JSON structure with required fields (object, data)",
+                  "pm.test(\"Response has required fields (object, data)\", function () {",
+                  "    pm.expect(jsonData).to.have.property(\"object\");",
+                  "    pm.expect(jsonData).to.have.property(\"data\");",
+                  "});",
+                  "",
+                  "// 4. The data array exists and has at least one element",
+                  "pm.test(\"Data array exists and has at least one element\", function () {",
+                  "    pm.expect(jsonData.data).to.be.an(\"array\");",
+                  "    pm.expect(jsonData.data.length).to.be.at.least(1);",
+                  "});",
+                  "",
+                  "// 5. Each model object contains required fields (id, object, created, owned_by)",
+                  "pm.test(\"Each model object contains required fields (id, object, created, owned_by)\", function () {",
+                  "    jsonData.data.forEach(function (model, index) {",
+                  "        pm.expect(model).to.have.property(\"id\", \"Model at index \" + index + \" should have id\");",
+                  "        pm.expect(model).to.have.property(\"object\", \"Model at index \" + index + \" should have object\");",
+                  "        pm.expect(model).to.have.property(\"created\", \"Model at index \" + index + \" should have created\");",
+                  "        pm.expect(model).to.have.property(\"owned_by\", \"Model at index \" + index + \" should have owned_by\");",
+                  "    });",
+                  "});",
+                  "",
+                  "// 6. Validate that model IDs are non-empty strings",
+                  "pm.test(\"Model IDs are non-empty strings\", function () {",
+                  "    jsonData.data.forEach(function (model, index) {",
+                  "        pm.expect(model.id).to.be.a(\"string\", \"Model ID at index \" + index + \" should be a string\");",
+                  "        pm.expect(model.id.length).to.be.above(0, \"Model ID at index \" + index + \" should not be empty\");",
+                  "    });",
+                  "});",
+                  "",
+                  "// 7. Validate that created timestamps are numbers",
+                  "pm.test(\"Created timestamps are numbers\", function () {",
+                  "    jsonData.data.forEach(function (model, index) {",
+                  "        pm.expect(model.created).to.be.a(\"number\", \"Created timestamp at index \" + index + \" should be a number\");",
+                  "    });",
+                  "});",
+                  "",
+                  "// 8. Check that the object field equals \"list\"",
+                  "pm.test(\"Object field equals 'list'\", function () {",
+                  "    pm.expect(jsonData.object).to.eql(\"list\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "id": "ab20bb03-4cdc-458d-bfca-aad6b06c8790",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/models",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "models"
+              ]
+            },
+            "description": "Get the list of available models"
+          },
+          "response": [
+            {
+              "id": "3aba6511-113e-4d9d-bd27-6f97b92f05b8",
+              "name": "Successful Models List",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": ""
+                },
+                "url": {
+                  "raw": "{{base_url}}/models",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "models"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [],
+              "cookie": [],
+              "body": "{\n  \"object\": \"list\",\n  \"data\": [\n    {\n      \"id\": \"llama3.2\",\n      \"object\": \"model\",\n      \"created\": 1677652288,\n      \"owned_by\": \"meta\"\n    },\n    {\n      \"id\": \"llama3.1\",\n      \"object\": \"model\",\n      \"created\": 1677652200,\n      \"owned_by\": \"meta\"\n    }\n  ]\n}"
+            },
+            {
+              "id": "2035ddfe-927d-4951-b38a-86ce7765ad3c",
+              "name": "Server Error",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": ""
+                },
+                "url": {
+                  "raw": "{{base_url}}/models",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "models"
+                  ]
+                }
+              },
+              "status": "Internal Server Error",
+              "code": 500,
+              "_postman_previewlanguage": "json",
+              "header": [],
+              "cookie": [],
+              "body": "{\n  \"detail\": \"Unable to retrieve models list. Please try again later.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Pull Model",
+          "id": "442875f8-c753-417f-822f-f9249e766d1e",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\": \"llama3.2\", \"quantize\": \"auto\", \"init\": false}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/pull",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "pull"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "id": "fb59eade-4cee-4933-9534-47f52ce87c47",
+      "description": "Models endpoint for listing available models"
+    },
+    {
+      "name": "Get Status",
+      "id": "287588ef-805f-4626-a5f7-015fa6c3c528",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/status",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "status"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Get Diagnostics",
+      "id": "90e7f115-8b49-4df4-95e3-80724e42d531",
+      "protocolProfileBehavior": {
+        "disableBodyPruning": true
+      },
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"model\": \"Qwen/Qwen3-Omni-30B-A3B-Instruct\",\r\n  \"messages\": [\r\n    { \"role\": \"system\", \"content\": \"You are AI Bot, a super AI assistant.\" },\r\n    { \"role\": \"user\", \"content\": \"Hello, who are you?\" }\r\n  ],\r\n  \"max_tokens\": 150,\r\n  \"temperature\": 0.7\r\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/diag",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "diag"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}
