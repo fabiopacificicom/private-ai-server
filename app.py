@@ -426,7 +426,7 @@ def load_model(model_name: str):
                 if tokenizer.pad_token is None:
                     tokenizer.pad_token = tokenizer.eos_token
                 
-                pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0)
+                pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0, token=os.environ.get("HUGGINGFACE_TOKEN"))
                 quantized = True
             except Exception:
                 log.exception("Quantized 4-bit load failed for %s, falling back to standard pipeline", model_name)
@@ -452,7 +452,7 @@ def load_model(model_name: str):
                     if tokenizer.pad_token is None:
                         tokenizer.pad_token = tokenizer.eos_token
                     
-                    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+                    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, token=os.environ.get("HUGGINGFACE_TOKEN"))
                 except ValueError as ve:
                     # Some model repos (Mixture-of-Experts / custom Qwen variants) expose
                     # a configuration class that does not map to transformers' AutoModelForCausalLM.
@@ -483,7 +483,7 @@ def load_model(model_name: str):
                                 model_kwargs["device_map"] = "auto"
                                 quantized = True
                             
-                            pipe = pipeline("text-generation", model=local_path or model_name, model_kwargs=model_kwargs, device=device if not should_q4 else None)
+                            pipe = pipeline("text-generation", model=local_path or model_name, model_kwargs=model_kwargs, device=device if not should_q4 else None, token=os.environ.get("HUGGINGFACE_TOKEN"))
                         except Exception:
                             log.exception("Pipeline fallback (trust_remote_code) failed for %s", model_name)
                             raise
@@ -493,9 +493,9 @@ def load_model(model_name: str):
                 except Exception:
                     log.exception("GPU-backed from_pretrained load failed for %s, falling back to pipeline with device param", model_name)
                     # Fallback: let pipeline manage device placement (device param)
-                    pipe = pipeline("text-generation", model=local_path or model_name, device=device, trust_remote_code=True, local_files_only=True)
+                    pipe = pipeline("text-generation", model=local_path or model_name, device=device, trust_remote_code=True, local_files_only=True, token=os.environ.get("HUGGINGFACE_TOKEN"))
             else:
-                pipe = pipeline("text-generation", model=local_path or model_name, device=device, trust_remote_code=True, local_files_only=True)
+                pipe = pipeline("text-generation", model=local_path or model_name, device=device, trust_remote_code=True, local_files_only=True, token=os.environ.get("HUGGINGFACE_TOKEN"))
 
         load_duration_ns = time.time_ns() - start_ns
         backend_used = "transformers_pipeline"
