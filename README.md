@@ -41,8 +41,7 @@ A high-performance, GPU-optimized FastAPI server for serving Hugging Face langua
 ```powershell
 git clone <repo-url>
 cd ai-server-py
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python -m venv .venv .\.venv\Scripts\Activate.ps1
 ```
 
 2. **Install dependencies:**
@@ -55,8 +54,7 @@ pip install -r requirements.txt
 3. **Enable CUDA (Windows):**
    - If you have an NVIDIA GPU but PyTorch shows CPU-only, run:
 
-   ```powershell
-   .\setup_cuda_pytorch.ps1
+   ```powershell .\setup_cuda_pytorch.ps1
    ```
 
    - This installs CUDA-enabled PyTorch (CUDA 12.6) and bitsandbytes for quantization
@@ -355,15 +353,18 @@ Returns server health status, uptime, cache statistics, and GPU metrics.
 ```
 
 **Status values:**
+
 - `healthy`: All inference backends available, server operational
 - `degraded`: No inference backends (transformers/vLLM) available
 
 **GPU status:**
+
 - `available`: CUDA available and GPU accessible
 - `unavailable`: CUDA not available or no GPU
 - `error`: Error while collecting GPU stats
 
 **Use cases:**
+
 - Load balancer health checks
 - Monitoring and alerting
 - Capacity planning (via GPU memory stats)
@@ -471,6 +472,7 @@ docker run -p 8005:8005 --gpus all ai-server
 ### Performance Tuning
 
 **For single large model (70B+):**
+
 ```powershell
 $env:MAX_CACHE_MODELS = "1"           # Only one model in memory
 $env:MODEL_Q4_THRESHOLD_BYTES = "0"   # Always use q4
@@ -478,6 +480,7 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ```
 
 **For multiple small models:**
+
 ```powershell
 $env:MAX_CACHE_MODELS = "5"           # Keep 5 models cached
 $env:MODEL_Q4_THRESHOLD_BYTES = "30000000000"  # Only q4 for >30GB
@@ -508,6 +511,7 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ## Development
 
 ### Project Structure
+
 ```
 ai-server-py/
  app.py                    # Main FastAPI server
@@ -519,6 +523,7 @@ ai-server-py/
 ```
 
 ### Key Dependencies
+
 - `fastapi` + `uvicorn`: API server
 - `torch` (CUDA): GPU acceleration
 - `transformers`: Model loading
@@ -554,12 +559,14 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 | **API format** | Ollama-compatible | Native Ollama |
 
 **Use this server if:**
+
 - You want native HF model support (no GGUF conversion)
 - You need explicit control over downloads
 - You want automatic quantization for large models
 - You prefer Python/FastAPI stack
 
 **Use Ollama if:**
+
 - You need cross-platform simplicity
 - You prefer GGUF ecosystem
 - You want one-command setup
@@ -579,6 +586,7 @@ MIT
 See [`.specs/ROADMAP.md`](.specs/ROADMAP.md) for detailed feature roadmap and timeline.
 
 **Next Release (v1.0)**: Production-Ready
+
 - 🔄 Streaming responses (SSE)
 - ❤️ Health check endpoint
 - ⏱️ Request timeouts
@@ -587,6 +595,7 @@ See [`.specs/ROADMAP.md`](.specs/ROADMAP.md) for detailed feature roadmap and ti
 - 📝 Improved error messages
 
 **Future Releases**:
+
 - v1.5: Advanced features (sessions, sampling params, model aliases)
 - v2.0: Production hardening (auth, monitoring, scaling)
 - v2.5: Ecosystem integration (OpenAI API, LangChain)
@@ -597,10 +606,12 @@ See [`.specs/ROADMAP.md`](.specs/ROADMAP.md) for detailed feature roadmap and ti
 ## Documentation
 
 ### For Users
+
 - [README.md](README.md) - Getting started, API reference, troubleshooting
 - [.specs/ROADMAP.md](.specs/ROADMAP.md) - Feature roadmap and timeline
 
 ### For Developers
+
 - [.github/instructions/coder-guidelines.instructions.md](.github/instructions/coder-guidelines.instructions.md) - Coding standards and patterns
 - [.github/copilot-instructions.md](.github/copilot-instructions.md) - AI agent onboarding guide
 - [.specs/SERVER-REVIEW.md](.specs/SERVER-REVIEW.md) - Architecture review and recommendations
@@ -613,6 +624,7 @@ See [`.specs/ROADMAP.md`](.specs/ROADMAP.md) for detailed feature roadmap and ti
 Issues and PRs welcome! See documentation above for development guidelines and roadmap.
 
 **Quick Links**:
+
 - [Roadmap](.specs/ROADMAP.md) - What's planned
 - [Coder Guidelines](.github/instructions/coder-guidelines.instructions.md) - How to code
 - [Phase 1 Plan](.specs/plans/phase1-implementation.md) - Next steps

@@ -53,6 +53,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+# Import database module for persistent job storage
+from database import init_job_database, get_job_db
+
 try:
     from vllm import LLM, SamplingParams
 except Exception:
@@ -93,6 +96,9 @@ except Exception:
 
 app = FastAPI()
 
+# Initialize persistent job database
+init_job_database("jobs.db")
+
 # Track server start time for uptime calculation
 server_start_time = time.time()
 
@@ -113,8 +119,8 @@ COOLDOWN_SECONDS = int(os.getenv("MODEL_LOAD_COOLDOWN", "300"))
 MAX_CONCURRENT_PULLS = int(os.getenv("MAX_CONCURRENT_PULLS", "2"))
 STREAMING_THREAD_TIMEOUT = int(os.getenv("STREAMING_THREAD_TIMEOUT", "30"))  # Timeout for streaming generation threads
 
-# Job registry for background pulls (job_id -> job metadata)
-jobs: Dict[str, Dict[str, Any]] = {}
+# Job registry replaced by persistent database storage
+# Legacy jobs dict removed - use database.py functions instead
 # Semaphore to limit concurrent background downloads
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PULLS)
 
@@ -221,7 +227,10 @@ def load_model(model_name: str):
 
     # Check cooldown for previously failed loads
     if _in_cooldown(model_name):
-        raise RuntimeError(f"Recent failed attempt for model '{model_name}', in cooldown")
+        raise RuntimeError(
+            f"Model '{model_name}' failed to load recently and is in cooldown ({COOLDOWN_SECONDS}s). "
+            f"This prevents retry storms. Wait a few minutes or restart the server to reset cooldown."
+        )
 
     # If model is cached, reuse it and mark as most-recently-used
     if model_name in model_cache:
@@ -284,7 +293,10 @@ def load_model(model_name: str):
                 local_path = None
 
     if local_path is None:
-        raise RuntimeError(f"Model '{model_name}' not available locally. Use the /pull endpoint to download it before loading.")
+        raise RuntimeError(
+            f"Model '{model_name}' not downloaded. "
+            f"Download it first: POST /pull {{\"model\":\"{model_name}\"}}"
+        )
 
     # Helper to add to cache and meta
     def _cache_model(name: str, backend: str, instance: Any, extra_meta: Dict[str, Any] = {}):
@@ -333,7 +345,12 @@ def load_model(model_name: str):
             "vllm_error": vllm_import_error if 'vllm_import_error' in globals() else None,
             "transformers_available": transformers_available,
         }
-        raise RuntimeError(f"No inference backend available for model {model_name}: {details}")
+        raise RuntimeError(
+            f"No inference backend available for model '{model_name}'. "
+            f"Install required packages: pip install transformers torch. "
+            f"For better performance: pip install vllm. "
+            f"Details: {details}"
+        )
 
     # Use transformers pipeline (simple fallback). This will download model to HF cache.
     # Transformers fallback: prefer quantized 4-bit loads for large models when possible
@@ -719,7 +736,22 @@ async def _chat_non_streaming(request: ChatRequest, model_name: str):
             await asyncio.to_thread(load_model, model_name)
         except Exception as e:
             log.exception("Failed to load model")
-            raise HTTPException(status_code=500, detail=str(e))
+            error_msg = str(e)
+            if "not available locally" in error_msg:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Model '{model_name}' not downloaded. Use: POST /pull {{\"model\":\"{model_name}\"}}"
+                )
+            elif "cooldown" in error_msg:
+                raise HTTPException(
+                    status_code=429, 
+                    detail=f"Model '{model_name}' is in cooldown after recent failure. Wait a few minutes and try again."
+                )
+            else:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Failed to load model '{model_name}': {error_msg}"
+                )
 
     # Build prompt (simple role-based concatenation)
     prompt = ""
@@ -735,7 +767,10 @@ async def _chat_non_streaming(request: ChatRequest, model_name: str):
     prompt += "Assistant: "
 
     if current_model is None:
-        raise HTTPException(status_code=500, detail="No model loaded")
+        raise HTTPException(
+            status_code=500, 
+            detail="No model currently loaded. Load a model first: POST /pull {\"model\":\"gpt2\", \"init\":true}"
+        )
 
     backend = model_meta.get(current_model_name, {}).get("backend")
 
@@ -749,7 +784,10 @@ def _generate_response(request: ChatRequest, model_name: str, prompt: str, backe
     # vLLM path
     if backend == "vllm":
         if SamplingParams is None:
-            raise HTTPException(status_code=500, detail="vLLM SamplingParams not available")
+            raise HTTPException(
+                status_code=500, 
+                detail="vLLM SamplingParams not available. Install vLLM: pip install vllm"
+            )
         sampling_params = SamplingParams(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
@@ -782,7 +820,10 @@ def _generate_response(request: ChatRequest, model_name: str, prompt: str, backe
     # transformers pipeline path
     if backend and backend.startswith("transformers"):
         if not transformers_available:
-            raise HTTPException(status_code=500, detail="Transformers not available on this host")
+            raise HTTPException(
+                status_code=500, 
+                detail="Transformers library not available. Install: pip install transformers torch"
+            )
         pipe = current_model
         # pipeline params: max_new_tokens, temperature, do_sample
         try:
@@ -872,7 +913,12 @@ def _generate_response(request: ChatRequest, model_name: str, prompt: str, backe
                     text = ""
         except Exception:
             log.exception("Transformers pipeline generation failed for model %s", model_name)
-            raise HTTPException(status_code=500, detail="Generation error on transformers backend")
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Text generation failed. This may be due to GPU memory issues. "
+                       f"Try: 1) Restart server to clear GPU memory, 2) Use smaller model, "
+                       f"3) Enable quantization. Error: {str(e)}"
+            )
 
         # Try to compute token counts using the pipeline tokenizer if available
         prompt_tokens = None
@@ -907,7 +953,11 @@ def _generate_response(request: ChatRequest, model_name: str, prompt: str, backe
         }
         return resp
 
-    raise HTTPException(status_code=500, detail=f"Unknown backend for model {model_name}: {backend}")
+    raise HTTPException(
+        status_code=500, 
+        detail=f"Unknown backend '{backend}' for model '{model_name}'. "
+               f"This is an internal error. Supported backends: vllm, transformers, pipeline."
+    )
 
 
 @app.get("/models")
@@ -996,11 +1046,14 @@ async def pull_model(payload: Dict[str, Any]):
         init = bool(raw_init)
 
     if not hf_hub_available or snapshot_download is None:
-        raise HTTPException(status_code=500, detail="HF Hub not available on this host; cannot pull models")
+        raise HTTPException(
+            status_code=500, 
+            detail="HuggingFace Hub not available. Install: pip install huggingface_hub"
+        )
 
     # Create a background job to perform the pull so API remains responsive.
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    job_data = {
         "id": job_id,
         "model": model_name,
         "quantize": quant,
@@ -1014,6 +1067,9 @@ async def pull_model(payload: Dict[str, Any]):
         "size_bytes": None,
         "preferred_quantized": None,
     }
+    
+    # Store job in persistent database
+    get_job_db().create_job(job_data)
 
     # Schedule the background pull task
     asyncio.create_task(_background_pull(job_id, model_name, quant, init))
@@ -1080,14 +1136,18 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
     This runs in the event loop but performs blocking HF calls inside threads
     via `asyncio.to_thread` and is concurrency-limited by `download_semaphore`.
     """
-    job = jobs.get(job_id)
+    job = get_job_db().get_job(job_id)
     if job is None:
         return
-    job["status"] = "running"
-    job["started_at"] = datetime.utcnow().isoformat() + "Z"
-    job["progress"] = 0.0
-    job["downloaded_bytes"] = 0
-    job["total_bytes"] = None
+    
+    # Update job status to running
+    get_job_db().update_job(job_id, {
+        "status": "running",
+        "started_at": datetime.utcnow().isoformat() + "Z",
+        "progress": 0.0,
+        "downloaded_bytes": 0,
+        "total_bytes": None
+    })
 
     try:
         log.info("Background pull start: %s (job=%s, quant=%s)", model_name, job_id, quant)
@@ -1103,7 +1163,9 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
                 size_bytes = sum([getattr(s, "size", 0) or 0 for s in siblings])
         except Exception:
             log.exception("Failed to probe model size before download for %s", model_name)
-        job["total_bytes"] = size_bytes
+        
+        # Update total bytes in database
+        get_job_db().update_job(job_id, {"total_bytes": size_bytes})
 
         # Acquire semaphore to limit concurrent downloads
         await download_semaphore.acquire()
@@ -1118,20 +1180,25 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
                 await asyncio.sleep(2)
 
                 downloaded_bytes = _calculate_downloaded_bytes(cache_path)
-                job["downloaded_bytes"] = downloaded_bytes
-
-                if job["total_bytes"] and job["total_bytes"] > 0:
-                    job["progress"] = min(0.99, downloaded_bytes / job["total_bytes"])
+                progress_updates = {"downloaded_bytes": downloaded_bytes}
+                
+                # Update progress calculation
+                if size_bytes and size_bytes > 0:
+                    progress_updates["progress"] = min(0.99, downloaded_bytes / size_bytes)
                 else:
                     # Total size unknown; expose downloaded bytes but leave progress indeterminate
-                    job["progress"] = None
+                    progress_updates["progress"] = None
+                
+                # Update database with progress
+                get_job_db().update_job(job_id, progress_updates)
 
             # Get download result
             local_path = await download_task
         finally:
             download_semaphore.release()
 
-        job["local_path"] = local_path
+        # Update database with download results
+        get_job_db().update_job(job_id, {"local_path": local_path})
 
         # If we could not determine size earlier, try again after download
         if size_bytes is None:
@@ -1142,12 +1209,14 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
                     size_bytes = sum([getattr(s, "size", 0) or 0 for s in siblings])
             except Exception:
                 log.exception("Failed to probe model size after download for %s", model_name)
-        job["total_bytes"] = size_bytes
-
+        # Update final progress and size
         final_downloaded = _calculate_downloaded_bytes(cache_path)
-        if final_downloaded:
-            job["downloaded_bytes"] = final_downloaded
-        job["progress"] = 1.0
+        success_updates = {
+            "total_bytes": size_bytes,
+            "downloaded_bytes": final_downloaded or 0,
+            "progress": 1.0
+        }
+        get_job_db().update_job(job_id, success_updates)
 
         # Decide preferred quantization
         preferred_quant = None
@@ -1173,32 +1242,45 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
                 # Record initialization error but keep model metadata
                 log.exception("Pull succeeded but initialization failed for %s", model_name)
                 # Note: do not mark job as failed because download succeeded
-                job.setdefault("notes", []).append("init_failed")
+                # Log the initialization failure for monitoring
 
-        job["status"] = "succeeded"
-        job["size_bytes"] = size_bytes
-        job["preferred_quantized"] = preferred_quant
-        job["finished_at"] = datetime.utcnow().isoformat() + "Z"
+        # Mark job as completed successfully
+        get_job_db().update_job(job_id, {
+            "status": "succeeded",
+            "size_bytes": size_bytes,
+            "preferred_quantized": preferred_quant,
+            "finished_at": datetime.utcnow().isoformat() + "Z"
+        })
         log.info("Background pull succeeded: %s (job=%s)", model_name, job_id)
 
     except Exception as e:
         tb = traceback.format_exc()
-        job["status"] = "failed"
-        job["error"] = str(e)
-        job["traceback"] = tb
-        job["finished_at"] = datetime.utcnow().isoformat() + "Z"
+        get_job_db().update_job(job_id, {
+            "status": "failed",
+            "error": str(e),
+            "traceback": tb,
+            "finished_at": datetime.utcnow().isoformat() + "Z"
+        })
         log.exception("Background pull failed: %s (job=%s): %s", model_name, job_id, e)
 
 
 @app.get("/jobs")
 async def list_jobs():
-    # Return shallow summary of jobs
-    return {"jobs": [{"id": j["id"], "model": j["model"], "status": j["status"], "created_at": j.get("created_at"), "started_at": j.get("started_at"), "finished_at": j.get("finished_at")} for j in jobs.values()]}
+    # Return shallow summary of recent jobs
+    jobs_list = get_job_db().list_jobs(limit=50)
+    return {"jobs": [{
+        "id": j["id"], 
+        "model": j["model"], 
+        "status": j["status"], 
+        "created_at": j.get("created_at"), 
+        "started_at": j.get("started_at"), 
+        "finished_at": j.get("finished_at")
+    } for j in jobs_list]}
 
 
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
-    job = jobs.get(job_id)
+    job = get_job_db().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
@@ -1235,8 +1317,10 @@ async def health():
         status = "degraded"  # No inference backends available
     
     # Count active and queued downloads
-    downloads_active = sum(1 for j in jobs.values() if j.get("status") == "running")
-    downloads_queued = sum(1 for j in jobs.values() if j.get("status") == "queued")
+    active_jobs = get_job_db().list_jobs(status_filter="running")
+    queued_jobs = get_job_db().list_jobs(status_filter="queued")
+    downloads_active = len(active_jobs)
+    downloads_queued = len(queued_jobs)
     
     return {
         "status": status,
