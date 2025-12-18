@@ -1,5 +1,6 @@
 {
   "info": {
+    "_postman_id": "127ca9cb-cd99-422c-95f1-344ead9d1ecc",
     "name": "AI Server API Tests",
     "description": "FastAPI server endpoints for AI model management and chat completion",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -10,6 +11,7 @@
       "item": [
         {
           "name": "Chat Completion",
+          "id": "fd9b8853-3ee6-47ea-949a-f96a5766e28d",
           "request": {
             "method": "POST",
             "header": [
@@ -20,14 +22,24 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"model\": \"microsoft/Phi-3-mini-4k-instruct\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"Hello, how are you?\"}\n  ],\n  \"max_tokens\": 512,\n  \"temperature\": 0.7,\n  \"stream\": false,\n  \"timeout\": 120\n}"
+              "raw": "{\n  \"model\": \"mistralai/Mistral-7B-v0.1\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"who is the hugging face CEO?\"}\n  ],\n  \"max_tokens\": 52,\n  \"temperature\": 0,\n  \"stream\": false,\n  \"timeout\": 300\n}"
             },
-            "url": "{{base_url}}/chat",
+            "url": {
+              "raw": "{{base_url}}/chat",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "chat"
+              ]
+            },
             "description": "Chat completion endpoint with streaming support"
-          }
+          },
+          "response": []
         },
         {
           "name": "Pull Model",
+          "id": "ec7aa086-0122-4a3a-9e4f-c7baf6a3b124",
           "request": {
             "method": "POST",
             "header": [
@@ -38,76 +50,149 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"model\": \"microsoft/Phi-3-mini-4k-instruct\",\n  \"quantize\": \"auto\",\n  \"init\": true\n}"
+              "raw": "{\n  \"model\": \"Qwen/Qwen3-0.6B\",\n  \"quantize\": \"auto\",\n  \"init\": true\n}"
             },
-            "url": "{{base_url}}/pull",
+            "url": {
+              "raw": "{{base_url}}/pull",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "pull"
+              ]
+            },
             "description": "Download model from HuggingFace"
-          }
+          },
+          "response": []
         },
         {
           "name": "List Models",
+          "id": "083023e4-1aae-42fb-b6e1-f2383db9657a",
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{base_url}}/models",
+            "url": {
+              "raw": "{{base_url}}/models",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "models"
+              ]
+            },
             "description": "List available/cached models"
-          }
+          },
+          "response": []
         },
         {
           "name": "Server Status",
+          "id": "32208500-1f26-47e8-83dc-e0187890ab52",
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{base_url}}/status",
+            "url": {
+              "raw": "{{base_url}}/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "status"
+              ]
+            },
             "description": "Server status information"
-          }
+          },
+          "response": []
         }
-      ]
+      ],
+      "id": "4aab409b-64d5-49eb-a02d-bf21ff5b866b"
     },
     {
       "name": "Monitoring & Diagnostics",
       "item": [
         {
           "name": "Health Check",
+          "id": "92f50b68-cc4c-442a-9bc3-e6ff2755dc95",
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{base_url}}/health",
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
             "description": "Health check endpoint"
-          }
+          },
+          "response": []
         },
         {
           "name": "Diagnostics",
+          "id": "64c691a5-b979-417b-bfc1-ad57b11a014e",
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{base_url}}/diag",
+            "url": {
+              "raw": "{{base_url}}/diag",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "diag"
+              ]
+            },
             "description": "Diagnostics and GPU information"
-          }
+          },
+          "response": []
         },
         {
           "name": "List Jobs",
+          "id": "68afbae3-8639-4de0-b251-f429df467bd9",
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{base_url}}/jobs",
+            "url": {
+              "raw": "{{base_url}}/jobs",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "jobs"
+              ]
+            },
             "description": "List all background jobs"
-          }
+          },
+          "response": []
         },
         {
           "name": "Get Job Details",
+          "id": "32874a5a-5865-4259-b096-a960d6f50856",
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{base_url}}/jobs/{{job_id}}",
+            "url": {
+              "raw": "{{base_url}}/jobs/{{job_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "jobs",
+                "{{job_id}}"
+              ]
+            },
             "description": "Get specific job details"
-          }
+          },
+          "response": []
         }
-      ]
+      ],
+      "id": "79dc0b0e-defb-4a24-8a8f-66299973b75a"
     }
   ],
   "variable": [
     {
+      "id": "4b06f11d-1239-47f1-996c-28cfecd87071",
       "key": "base_url",
       "value": "",
       "type": "string"

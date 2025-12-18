@@ -12,6 +12,33 @@ from collections import OrderedDict
 # Set PyTorch CUDA allocator config to reduce fragmentation and OOM errors
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
+# Load a local .env file (if present) so users can set HF cache paths and other
+# environment overrides without editing system/user environment variables.
+def _load_local_env(path: str = ".env") -> None:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                # Only set variables that are not already set in the environment
+                if key and os.environ.get(key) is None:
+                    os.environ[key] = val
+    except FileNotFoundError:
+        # Silently ignore missing .env
+        pass
+    except Exception:
+        # Best-effort: don't fail startup just because of .env parsing
+        pass
+
+# Load `.env` from repo root (if exists) so HF cache and other vars can be overridden
+_load_local_env()
+
 # Ensure Hugging Face cache lives in a user-controlled folder so the user
 # can manage downloaded models manually and avoid Windows permission issues.
 # Preference order:
@@ -394,6 +421,11 @@ def load_model(model_name: str):
                     local_files_only=True,
                 )
                 tokenizer = AutoTokenizer.from_pretrained(local_path or model_name, use_fast=False, trust_remote_code=True, local_files_only=True)
+                
+                # Configure tokenizer padding for efficient batching
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
+                
                 pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0)
                 quantized = True
             except Exception:
@@ -415,6 +447,11 @@ def load_model(model_name: str):
                         local_files_only=True,
                     )
                     tokenizer = AutoTokenizer.from_pretrained(local_path or model_name, use_fast=False, trust_remote_code=True, local_files_only=True)
+                    
+                    # Configure tokenizer padding for efficient batching
+                    if tokenizer.pad_token is None:
+                        tokenizer.pad_token = tokenizer.eos_token
+                    
                     pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
                 except ValueError as ve:
                     # Some model repos (Mixture-of-Experts / custom Qwen variants) expose
@@ -858,96 +895,77 @@ def _generate_response(request: ChatRequest, model_name: str, prompt: str, backe
         # pipeline params: max_new_tokens, temperature, do_sample
         try:
             gen_start = time.time_ns()
-            # First, try chat-style invocation: pass the messages list directly to the pipeline
-            # Some chat-capable pipelines support being called with a messages list
-            result = None
-            try:
-                result = pipe(request.messages, max_new_tokens=request.max_tokens, temperature=request.temperature, do_sample=(request.temperature > 0.0))
-            except Exception as e_messages:
-                log.debug("pipeline(messages) failed: %s", e_messages)
-                # Fallback to the legacy prompt string for pipelines that expect a single string
+            
+            # Extract model and tokenizer for optimized generation
+            model_obj = getattr(pipe, "model", None)
+            tokenizer = getattr(pipe, "tokenizer", None)
+            
+            # Determine model device once (should already be on GPU from load time)
+            model_device = None
+            if model_obj is not None:
                 try:
-                    result = pipe(prompt, max_new_tokens=request.max_tokens, temperature=request.temperature, do_sample=(request.temperature > 0.0))
-                except Exception as e_prompt:
-                    log.debug("pipeline(prompt) also failed: %s", e_prompt)
-                    # As a last resort, attempt direct model.generate using tokenizer + model
-                    try:
-                        model_obj = getattr(pipe, "model", None)
-                        tokenizer = getattr(pipe, "tokenizer", None)
-                        if model_obj is None or tokenizer is None:
-                            raise RuntimeError("Pipeline does not expose model/tokenizer for direct generate fallback")
-
-                        # Tokenize prompt
-                        inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
-                        input_ids = inputs.get("input_ids")
-                        attention_mask = inputs.get("attention_mask")
-
-                        # Move model and tensors to GPU if available
-                        model_device = None
-                        try:
-                            next_param = next(model_obj.parameters())
-                            model_device = next_param.device
-                        except Exception:
-                            model_device = None
-
-                        if torch is not None and torch.cuda.is_available():
-                            try:
-                                model_obj.to("cuda")
-                                model_device = torch.device("cuda")
-                            except Exception:
-                                log.debug("Could not move model to CUDA; continuing on CPU")
-
-                        if input_ids is not None and model_device is not None:
-                            try:
-                                input_ids = input_ids.to(model_device)
-                                if attention_mask is not None:
-                                    attention_mask = attention_mask.to(model_device)
-                            except Exception:
-                                log.debug("Failed to move input tensors to model device; proceeding without explicit move")
-
-                        gen_kwargs = {"max_new_tokens": request.max_tokens}
-                        if request.temperature and request.temperature > 0.0:
-                            gen_kwargs.update({"do_sample": True, "temperature": request.temperature})
-                        else:
-                            gen_kwargs.update({"do_sample": False})
-
-                        # Fix for Phi-3 and other models with cache issues
-                        # These models have incompatible cache implementations
-                        model_config = getattr(model_obj, "config", None)
-                        model_type = getattr(model_config, "model_type", "").lower() if model_config else ""
-                        if model_type in ["phi3", "phi"] or "phi" in model_name.lower():
-                            # Disable past_key_values for Phi models to avoid cache compatibility issues
-                            gen_kwargs["use_cache"] = False
-                            log.debug("Disabled use_cache for Phi model to avoid DynamicCache compatibility issues")
-
-                        # Call model.generate directly
-                        try:
-                            outputs_ids = model_obj.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
-                        except Exception as e:
-                            # If we get a cache-related error, try again without caching
-                            if "cache" in str(e).lower() or "seen_tokens" in str(e).lower() or "dynamiccache" in str(e).lower():
-                                log.debug("Cache error detected, retrying without use_cache: %s", e)
-                                gen_kwargs["use_cache"] = False
-                                outputs_ids = model_obj.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
-                            else:
-                                raise
-
-                        # Extract generated portion (tokens after input length)
-                        gen_text = ""
-                        try:
-                            gen_tokens = outputs_ids[:, input_ids.shape[1]:]
-                            gen_texts = tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)
-                            gen_text = gen_texts[0] if isinstance(gen_texts, list) and len(gen_texts) > 0 else ""
-                        except Exception:
-                            # Fallback: decode full output
-                            gen_text = tokenizer.decode(outputs_ids[0], skip_special_tokens=True)
-
-                        # Build a normalized pipeline-style result
-                        result = [{"generated_text": gen_text}]
-                    except Exception:
-                        log.exception("Direct model.generate fallback failed for model %s", model_name)
+                    next_param = next(model_obj.parameters())
+                    model_device = next_param.device
+                except Exception:
+                    pass
+            
+            # Use direct model.generate for best performance (avoids pipeline overhead)
+            if model_obj is not None and tokenizer is not None:
+                # Tokenize prompt once
+                inputs = tokenizer(prompt, return_tensors="pt", truncation=True, padding=True)
+                input_ids = inputs.get("input_ids")
+                attention_mask = inputs.get("attention_mask")
+                
+                # Move inputs to model device (should be GPU already)
+                if input_ids is not None and model_device is not None:
+                    input_ids = input_ids.to(model_device)
+                    if attention_mask is not None:
+                        attention_mask = attention_mask.to(model_device)
+                
+                # Build generation kwargs with optimizations
+                gen_kwargs = {
+                    "max_new_tokens": request.max_tokens,
+                    "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
+                }
+                
+                if request.temperature and request.temperature > 0.0:
+                    gen_kwargs.update({
+                        "do_sample": True,
+                        "temperature": request.temperature,
+                        "top_p": 0.95,  # Add nucleus sampling for better quality
+                    })
+                else:
+                    gen_kwargs["do_sample"] = False
+                
+                # Check for Phi models or cache issues
+                model_config = getattr(model_obj, "config", None)
+                model_type = getattr(model_config, "model_type", "").lower() if model_config else ""
+                if model_type in ["phi3", "phi"] or "phi" in model_name.lower():
+                    gen_kwargs["use_cache"] = False
+                    log.debug("Disabled use_cache for Phi model")
+                
+                # Generate with error recovery
+                try:
+                    outputs_ids = model_obj.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
+                except Exception as e:
+                    if "cache" in str(e).lower() or "seen_tokens" in str(e).lower() or "dynamiccache" in str(e).lower():
+                        log.debug("Cache error detected, retrying without use_cache: %s", e)
+                        gen_kwargs["use_cache"] = False
+                        outputs_ids = model_obj.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
+                    else:
                         raise
-
+                
+                # Decode only new tokens (skip input)
+                gen_tokens = outputs_ids[:, input_ids.shape[1]:]
+                gen_texts = tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)
+                gen_text = gen_texts[0] if isinstance(gen_texts, list) and len(gen_texts) > 0 else ""
+                
+                result = [{"generated_text": gen_text}]
+            else:
+                # Fallback to pipeline if model/tokenizer not accessible
+                log.warning("Using pipeline fallback (slower) - model/tokenizer not accessible")
+                result = pipe(prompt, max_new_tokens=request.max_tokens, temperature=request.temperature, do_sample=(request.temperature > 0.0))
+            
             gen_duration = time.time_ns() - gen_start
 
             # Normalize possible return shapes from different pipelines into a plain text string
@@ -959,7 +977,7 @@ def _generate_response(request: ChatRequest, model_name: str, prompt: str, backe
                     text = str(result)
                 except Exception:
                     text = ""
-        except Exception:
+        except Exception as e:
             log.exception("Transformers pipeline generation failed for model %s", model_name)
             raise HTTPException(
                 status_code=500, 
@@ -1025,7 +1043,7 @@ async def clear_cooldown(request: dict):
 @app.get("/models")
 async def list_models():
     # Return models in an Ollama-compatible list structure. We include cached models plus example known models.
-    known = ["Qwen/Qwen2-72B-Chat", "meta-llama/Meta-Llama-3-70B-Instruct"]
+    known = []
     models = []
 
     # include models tracked in model_meta (these may have been pulled or initialized)
