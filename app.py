@@ -12,6 +12,33 @@ from collections import OrderedDict
 # Set PyTorch CUDA allocator config to reduce fragmentation and OOM errors
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
+# Load a local .env file (if present) so users can set HF cache paths and other
+# environment overrides without editing system/user environment variables.
+def _load_local_env(path: str = ".env") -> None:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                # Only set variables that are not already set in the environment
+                if key and os.environ.get(key) is None:
+                    os.environ[key] = val
+    except FileNotFoundError:
+        # Silently ignore missing .env
+        pass
+    except Exception:
+        # Best-effort: don't fail startup just because of .env parsing
+        pass
+
+# Load `.env` from repo root (if exists) so HF cache and other vars can be overridden
+_load_local_env()
+
 # Ensure Hugging Face cache lives in a user-controlled folder so the user
 # can manage downloaded models manually and avoid Windows permission issues.
 # Preference order:
@@ -1025,7 +1052,7 @@ async def clear_cooldown(request: dict):
 @app.get("/models")
 async def list_models():
     # Return models in an Ollama-compatible list structure. We include cached models plus example known models.
-    known = ["Qwen/Qwen2-72B-Chat", "meta-llama/Meta-Llama-3-70B-Instruct"]
+    known = []
     models = []
 
     # include models tracked in model_meta (these may have been pulled or initialized)

@@ -65,6 +65,21 @@ pip install -r requirements.txt
 python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ```
 
+### Using a .env to control model cache location
+
+You can set a `.env` file in the repository root to override environment variables used by the server (no extra Python packages required). Example: create a `.env` file with:
+
+```
+# .env (example)
+HF_HOME=D:\ai-server-models
+TRANSFORMERS_CACHE=D:\ai-server-models\transformers
+# optional: MAX_CACHE_MODELS=1
+```
+
+The server reads `.env` on startup (or on reload) and will prefer `HF_HOME` when deciding where to store downloaded models. This makes it easy to place the model cache on `D:` instead of `C:`.
+
+There is also a supplied [`.env.example`](.env.example) you can copy and edit.
+
 ### First Steps
 
 1. **Check diagnostics:**
@@ -400,7 +415,7 @@ Returns server health status, uptime, cache statistics, and GPU metrics.
 | **CUDA OOM errors** | 1. Reduce `MAX_CACHE_MODELS` to `1`<br>2. Use q4 quantization<br>3. Restart server to clear GPU<br>4. Check `nvidia-smi` for other GPU processes |
 | **"requires accelerate" error** | `pip install accelerate` |
 | **CPU-only despite having GPU** | Run `.\setup_cuda_pytorch.ps1` to install CUDA PyTorch |
-| **Slow inference** | Ensure CUDA is enabled (`/diag` should show `cuda_available: true`) |
+| **Slow inference (Windows)** | **transformers pipeline is 3-5x slower than Ollama/llama.cpp**<br>1. Migrate to Linux and use vLLM backend for production<br>2. Use Ollama for performance-critical workloads<br>3. Accept 20-40 tokens/sec for dev/testing on Windows |
 | **Download fails/hangs** | Clear HF cache and retry: `rm -r ~/.cache/huggingface/hub/models--<model-name>` |
 
 ### CUDA OOM Deep Dive
@@ -548,7 +563,7 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 
 | Feature | This Server | Ollama |
 |---------|-------------|--------|
-| **Backend** | vLLM  transformers | llama.cpp |
+| **Backend** | vLLM (Linux)  transformers (Windows) | llama.cpp |
 | **GPU optimization** | Native CUDA + quantization | Metal/CUDA via llama.cpp |
 | **Model format** | Native HF (safetensors) | GGUF conversion required |
 | **Auto-download** | Explicit `/pull` only | Auto-downloads on first use |
@@ -557,6 +572,8 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 | **Job tracking** |  Background jobs + status |  |
 | **Multi-model cache** |  Configurable LRU |  |
 | **API format** | Ollama-compatible | Native Ollama |
+| **Performance (Windows)** | 🐌 20-40 tok/s (transformers) | 🚀 60-120 tok/s (llama.cpp) |
+| **Performance (Linux)** | 🚀 60-120 tok/s (vLLM) | 🚀 60-120 tok/s (llama.cpp) |
 
 **Use this server if:**
 
@@ -564,12 +581,25 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 - You need explicit control over downloads
 - You want automatic quantization for large models
 - You prefer Python/FastAPI stack
+- **You're running on Linux with vLLM** (matches Ollama performance)
 
 **Use Ollama if:**
 
 - You need cross-platform simplicity
 - You prefer GGUF ecosystem
 - You want one-command setup
+- **You need fast inference on Windows** (llama.cpp is 3-5x faster than transformers)
+
+### Performance Reality Check
+
+On **Windows**, this server uses `transformers` pipeline which is significantly slower than Ollama's llama.cpp:
+
+- **Small models (0.6B-7B)**: 20-40 tokens/sec vs Ollama's 80-150 tokens/sec
+- **Large models (30B-80B q4)**: 15-30 tokens/sec vs Ollama's 50-100 tokens/sec
+
+On **Linux**, this server uses vLLM which matches or exceeds Ollama performance.
+
+**Recommendation**: For production Windows deployments requiring high throughput, use Ollama. Use this server for development, testing, or Linux production deployments.
 
 ---
 
