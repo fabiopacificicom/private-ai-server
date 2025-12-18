@@ -12,6 +12,38 @@ from collections import OrderedDict
 # Set PyTorch CUDA allocator config to reduce fragmentation and OOM errors
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
+# Ensure Hugging Face cache lives in a user-controlled folder so the user
+# can manage downloaded models manually and avoid Windows permission issues.
+# Preference order:
+# 1) Use existing HF_HOME environment variable if set by the user
+# 2) Otherwise use a dedicated folder under the user's home: ~/ai-server-models
+# This is set before importing any Hugging Face modules.
+default_hf_home = os.getenv("HF_HOME")
+if not default_hf_home:
+    default_hf_home = os.path.join(os.path.expanduser("~"), "ai-server-models")
+os.environ.setdefault("HF_HOME", default_hf_home)
+
+# Disable symbolic links in HF cache to avoid Windows privilege errors (WinError 1314).
+# On Windows, creating symlinks requires either Developer Mode or running as Administrator.
+# Disabling symlinks uses more disk space but avoids permission issues.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
+
+# Make sure the folder exists and is writable by the current user.
+try:
+    os.makedirs(os.environ["HF_HOME"], exist_ok=True)
+    # Try to create a temporary file to validate write permissions
+    test_path = os.path.join(os.environ["HF_HOME"], ".perm_check")
+    with open(test_path, "w") as _f:
+        _f.write("ok")
+    try:
+        os.remove(test_path)
+    except Exception:
+        pass
+except Exception as e:
+    # Best-effort: continue but let later HF operations surface permission errors
+    # We'll log this when logging is configured later.
+    print(f"Warning: could not ensure HF_HOME '{os.environ.get('HF_HOME')}' exists or is writable: {e}")
+
 try:
     import torch
 except Exception:
