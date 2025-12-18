@@ -585,14 +585,23 @@ MIT
 
 See [`.specs/ROADMAP.md`](.specs/ROADMAP.md) for detailed feature roadmap and timeline.
 
-**Next Release (v1.0)**: Production-Ready
+**Current Release (v1.0)**: ✅ Production-Ready - COMPLETED
 
-- 🔄 Streaming responses (SSE)
-- ❤️ Health check endpoint
-- ⏱️ Request timeouts
-- 📊 Download progress tracking
-- 💾 Persistent job storage (SQLite)
-- 📝 Improved error messages
+- ✅ Streaming responses (SSE)
+- ✅ Health check endpoint
+- ✅ Request timeouts
+- ✅ Download progress tracking
+- ✅ Persistent job storage (SQLite)
+- ✅ Improved error messages
+
+**Next Release (v1.5)**: Advanced Features
+
+- 🔄 Multi-turn conversation sessions
+- 🎯 Custom sampling parameters  
+- 🏷️ Model aliases and presets
+- 🔄 Model preloading on startup
+- ⚖️ Load balancing across models
+- 📊 Advanced metrics and monitoring
 
 **Future Releases**:
 
