@@ -90,12 +90,51 @@ log = logging.getLogger("ai-server")
 logging.basicConfig(level=logging.INFO)
 
 
+def _resolve_model_cache_path(model_name: str) -> str:
+    """Return expected Hugging Face cache path for a model."""
+    hf_home = os.getenv("HF_HOME", os.path.join(os.path.expanduser("~"), ".cache", "huggingface"))
+    return os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
+
+
+def _calculate_downloaded_bytes(cache_path: str) -> int:
+    """Sum all downloaded bytes within the cache path."""
+    if not os.path.exists(cache_path):
+        return 0
+
+    downloaded = 0
+    for root, _, files in os.walk(cache_path):
+        for name in files:
+            fp = os.path.join(root, name)
+            try:
+                downloaded += os.path.getsize(fp)
+            except Exception:
+                continue
+    return downloaded
+
+
+async def _with_timeout(coro, timeout_seconds: int, cleanup_func=None):
+    """Wrap a coroutine with timeout and optional cleanup on timeout."""
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        log.warning("Request timed out after %s seconds", timeout_seconds)
+
+        if cleanup_func is not None:
+            try:
+                cleanup_func()
+            except Exception:
+                log.exception("Error during timeout cleanup")
+
+        raise HTTPException(status_code=408, detail=f"Request timed out after {timeout_seconds} seconds")
+
+
 class ChatRequest(BaseModel):
     model: str
     messages: List[Dict[str, str]]
     max_tokens: int = 512
     temperature: float = 0.7
     stream: bool = False  # Enable streaming responses
+    timeout: Optional[int] = 120  # Request timeout in seconds (1-600), default 120s
 
 
 def _evict_lru_if_needed():
@@ -600,7 +639,23 @@ async def _stream_chat_response(model_name: str, messages: List[Dict[str, str]],
 async def chat(request: ChatRequest):
     model_name = request.model
     
-    # If streaming is requested, return StreamingResponse
+    # Validate timeout parameter (1-600 seconds)
+    timeout_seconds = request.timeout or 120
+    if timeout_seconds < 1 or timeout_seconds > 600:
+        raise HTTPException(status_code=400, detail="Timeout must be between 1 and 600 seconds")
+    
+    # GPU cleanup function for timeout scenarios
+    def cleanup_on_timeout():
+        """Cleanup GPU memory if request times out."""
+        if torch is not None and torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            except Exception:
+                log.exception("Error during GPU cleanup on timeout")
+        gc.collect()
+    
+    # If streaming is requested, return StreamingResponse (no timeout applied to streaming)
     if request.stream:
         return StreamingResponse(
             _stream_chat_response(
@@ -616,11 +671,20 @@ async def chat(request: ChatRequest):
             }
         )
 
-    # Non-streaming response (existing implementation)
+    # Wrap the entire non-streaming chat logic in timeout
+    return await _with_timeout(
+        _chat_non_streaming(request, model_name),
+        timeout_seconds=timeout_seconds,
+        cleanup_func=cleanup_on_timeout
+    )
+
+
+async def _chat_non_streaming(request: ChatRequest, model_name: str):
+    """Non-streaming chat implementation (extracted for timeout wrapping)."""
     # Load the model if different
     if current_model_name != model_name:
         try:
-            load_model(model_name)
+            await asyncio.to_thread(load_model, model_name)
         except Exception as e:
             log.exception("Failed to load model")
             raise HTTPException(status_code=500, detail=str(e))
@@ -643,6 +707,13 @@ async def chat(request: ChatRequest):
 
     backend = model_meta.get(current_model_name, {}).get("backend")
 
+    # Run generation in thread to avoid blocking event loop
+    result = await asyncio.to_thread(_generate_response, request, model_name, prompt, backend)
+    return result
+
+
+def _generate_response(request: ChatRequest, model_name: str, prompt: str, backend: str):
+    """Synchronous generation logic (run in thread)."""
     # vLLM path
     if backend == "vllm":
         if SamplingParams is None:
@@ -982,21 +1053,16 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
         return
     job["status"] = "running"
     job["started_at"] = datetime.utcnow().isoformat() + "Z"
+    job["progress"] = 0.0
+    job["downloaded_bytes"] = 0
+    job["total_bytes"] = None
 
     try:
         log.info("Background pull start: %s (job=%s, quant=%s)", model_name, job_id, quant)
 
-        # Acquire semaphore to limit concurrent downloads
-        await download_semaphore.acquire()
-        try:
-            # snapshot_download can be blocking; run in thread
-            local_path = await asyncio.to_thread(snapshot_download, repo_id=model_name)
-        finally:
-            download_semaphore.release()
+        cache_path = _resolve_model_cache_path(model_name)
 
-        job["local_path"] = local_path
-
-        # Probe size if possible
+        # Probe size before download so progress can be estimated accurately
         size_bytes = None
         try:
             if model_info is not None:
@@ -1004,7 +1070,52 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
                 siblings = getattr(info, "siblings", []) or []
                 size_bytes = sum([getattr(s, "size", 0) or 0 for s in siblings])
         except Exception:
-            log.exception("Failed to probe model size after download for %s", model_name)
+            log.exception("Failed to probe model size before download for %s", model_name)
+        job["total_bytes"] = size_bytes
+
+        # Acquire semaphore to limit concurrent downloads
+        await download_semaphore.acquire()
+        try:
+            # Start download in background thread and poll progress
+            download_task = asyncio.create_task(
+                asyncio.to_thread(snapshot_download, repo_id=model_name)
+            )
+
+            # Poll download progress every 2 seconds while download is running
+            while not download_task.done():
+                await asyncio.sleep(2)
+
+                downloaded_bytes = _calculate_downloaded_bytes(cache_path)
+                job["downloaded_bytes"] = downloaded_bytes
+
+                if job["total_bytes"] and job["total_bytes"] > 0:
+                    job["progress"] = min(0.99, downloaded_bytes / job["total_bytes"])
+                else:
+                    # Total size unknown; expose downloaded bytes but leave progress indeterminate
+                    job["progress"] = None
+
+            # Get download result
+            local_path = await download_task
+        finally:
+            download_semaphore.release()
+
+        job["local_path"] = local_path
+
+        # If we could not determine size earlier, try again after download
+        if size_bytes is None:
+            try:
+                if model_info is not None:
+                    info = await asyncio.to_thread(model_info, model_name)
+                    siblings = getattr(info, "siblings", []) or []
+                    size_bytes = sum([getattr(s, "size", 0) or 0 for s in siblings])
+            except Exception:
+                log.exception("Failed to probe model size after download for %s", model_name)
+        job["total_bytes"] = size_bytes
+
+        final_downloaded = _calculate_downloaded_bytes(cache_path)
+        if final_downloaded:
+            job["downloaded_bytes"] = final_downloaded
+        job["progress"] = 1.0
 
         # Decide preferred quantization
         preferred_quant = None
