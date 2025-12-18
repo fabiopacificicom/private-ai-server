@@ -881,8 +881,26 @@ def _generate_response(request: ChatRequest, model_name: str, prompt: str, backe
                         else:
                             gen_kwargs.update({"do_sample": False})
 
+                        # Fix for Phi-3 and other models with cache issues
+                        # These models have incompatible cache implementations
+                        model_config = getattr(model_obj, "config", None)
+                        model_type = getattr(model_config, "model_type", "").lower() if model_config else ""
+                        if model_type in ["phi3", "phi"] or "phi" in model_name.lower():
+                            # Disable past_key_values for Phi models to avoid cache compatibility issues
+                            gen_kwargs["use_cache"] = False
+                            log.debug("Disabled use_cache for Phi model to avoid DynamicCache compatibility issues")
+
                         # Call model.generate directly
-                        outputs_ids = model_obj.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
+                        try:
+                            outputs_ids = model_obj.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
+                        except Exception as e:
+                            # If we get a cache-related error, try again without caching
+                            if "cache" in str(e).lower() or "seen_tokens" in str(e).lower() or "dynamiccache" in str(e).lower():
+                                log.debug("Cache error detected, retrying without use_cache: %s", e)
+                                gen_kwargs["use_cache"] = False
+                                outputs_ids = model_obj.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
+                            else:
+                                raise
 
                         # Extract generated portion (tokens after input length)
                         gen_text = ""
