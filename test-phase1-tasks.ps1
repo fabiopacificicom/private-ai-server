@@ -70,6 +70,51 @@ try {
 
 Write-Host ""
 Write-Host "Test 1.4: Request Timeout & Cancellation" -ForegroundColor Yellow
+
+# First, ensure gpt2 is available for chat tests
+Write-Host "Pre-requisite: Pulling gpt2 model for chat tests..."
+$gpt2PullBody = @{
+    model = "gpt2"
+    init = $true
+} | ConvertTo-Json
+
+try {
+    $gpt2PullResponse = Invoke-RestMethod -Method POST -Uri "$baseUrl/pull" -ContentType "application/json" -Body $gpt2PullBody
+    $gpt2JobId = $gpt2PullResponse.job_id
+    Write-Host "GPT2 pull job started: $gpt2JobId" -ForegroundColor Green
+    
+    # Wait for gpt2 pull to complete (or timeout after 120 seconds)
+    $maxGpt2Polls = 60
+    $gpt2PollCount = 0
+    
+    while ($gpt2PollCount -lt $maxGpt2Polls) {
+        Start-Sleep -Seconds 2
+        $gpt2JobStatus = Invoke-RestMethod -Uri "$baseUrl/jobs/$gpt2JobId"
+        
+        Write-Host "  GPT2 Status: $($gpt2JobStatus.status)" -ForegroundColor Gray
+        
+        if ($gpt2JobStatus.status -eq "succeeded") {
+            Write-Host "✅ GPT2 model ready for chat tests!" -ForegroundColor Green
+            break
+        } elseif ($gpt2JobStatus.status -eq "failed") {
+            Write-Host "❌ GPT2 pull failed: $($gpt2JobStatus.error)" -ForegroundColor Red
+            Write-Host "Chat tests will likely fail" -ForegroundColor Yellow
+            break
+        }
+        
+        $gpt2PollCount++
+    }
+    
+    if ($gpt2PollCount -ge $maxGpt2Polls) {
+        Write-Host "⚠️  GPT2 pull timed out after 2 minutes" -ForegroundColor Yellow
+        Write-Host "Chat tests may fail" -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host "⚠️  Warning: Failed to pull gpt2 model: $_" -ForegroundColor Yellow
+    Write-Host "Chat tests may fail if gpt2 is not already cached" -ForegroundColor Yellow
+}
+
+Write-Host ""
 Write-Host "Testing with very short timeout (should trigger timeout)..."
 
 $chatBody = @{
