@@ -467,9 +467,34 @@ def load_model(model_name: str):
             extra["size_bytes"] = size_bytes
         _cache_model(model_name, backend_used, pipe, extra_meta=extra)
         return
-    except Exception:
+    except Exception as e:
+        error_msg = str(e)
         log.exception("Transformers fallback failed to load model %s", model_name)
         _record_failed_load(model_name)
+        
+        # Check for missing dependencies error
+        if "This modeling file requires the following packages" in error_msg and "Run `pip install" in error_msg:
+            # Extract package names from error message
+            import re
+            packages_match = re.search(r'pip install ([^`]+)', error_msg)
+            if packages_match:
+                packages = packages_match.group(1).strip()
+                raise RuntimeError(
+                    f"Model '{model_name}' requires additional dependencies. "
+                    f"Install them with: pip install {packages}"
+                )
+        
+        # Check for other import errors
+        if "ImportError" in error_msg and "No module named" in error_msg:
+            # Extract missing module name
+            module_match = re.search(r"No module named '([^']+)'", error_msg)
+            if module_match:
+                missing_module = module_match.group(1)
+                raise RuntimeError(
+                    f"Model '{model_name}' requires missing dependency '{missing_module}'. "
+                    f"Install it with: pip install {missing_module}"
+                )
+        
         raise
 
 
@@ -747,6 +772,11 @@ async def _chat_non_streaming(request: ChatRequest, model_name: str):
                     status_code=429, 
                     detail=f"Model '{model_name}' is in cooldown after recent failure. Wait a few minutes and try again."
                 )
+            elif "requires additional dependencies" in error_msg or "requires missing dependency" in error_msg:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing dependencies for model '{model_name}': {error_msg}"
+                )
             else:
                 raise HTTPException(
                     status_code=500, 
@@ -976,6 +1006,20 @@ def _generate_response(request: ChatRequest, model_name: str, prompt: str, backe
         detail=f"Unknown backend '{backend}' for model '{model_name}'. "
                f"This is an internal error. Supported backends: vllm, transformers, pipeline."
     )
+
+
+@app.post("/debug/clear-cooldown")
+async def clear_cooldown(request: dict):
+    """Clear cooldown for a specific model (debug endpoint)."""
+    model_name = request.get("model")
+    if not model_name:
+        raise HTTPException(status_code=400, detail="Missing 'model' parameter")
+    
+    if model_name in failed_loads:
+        del failed_loads[model_name]
+        return {"message": f"Cooldown cleared for model '{model_name}'"}
+    else:
+        return {"message": f"No cooldown found for model '{model_name}'"}
 
 
 @app.get("/models")
