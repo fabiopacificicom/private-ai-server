@@ -1,0 +1,116 @@
+{
+  "info": {
+    "name": "AI Server API Tests",
+    "description": "FastAPI server endpoints for AI model management and chat completion",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Chat & Models",
+      "item": [
+        {
+          "name": "Chat Completion",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"microsoft/Phi-3-mini-4k-instruct\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"Hello, how are you?\"}\n  ],\n  \"max_tokens\": 512,\n  \"temperature\": 0.7,\n  \"stream\": false,\n  \"timeout\": 120\n}"
+            },
+            "url": "{{base_url}}/chat",
+            "description": "Chat completion endpoint with streaming support"
+          }
+        },
+        {
+          "name": "Pull Model",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"microsoft/Phi-3-mini-4k-instruct\",\n  \"quantize\": \"auto\",\n  \"init\": true\n}"
+            },
+            "url": "{{base_url}}/pull",
+            "description": "Download model from HuggingFace"
+          }
+        },
+        {
+          "name": "List Models",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/models",
+            "description": "List available/cached models"
+          }
+        },
+        {
+          "name": "Server Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/status",
+            "description": "Server status information"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Monitoring & Diagnostics",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/health",
+            "description": "Health check endpoint"
+          }
+        },
+        {
+          "name": "Diagnostics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/diag",
+            "description": "Diagnostics and GPU information"
+          }
+        },
+        {
+          "name": "List Jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/jobs",
+            "description": "List all background jobs"
+          }
+        },
+        {
+          "name": "Get Job Details",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/jobs/{{job_id}}",
+            "description": "Get specific job details"
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
