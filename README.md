@@ -256,7 +256,94 @@ data: {"delta": {}, "done": true}
 
 ---
 
-### GET /models
+### POST /chat/multimodal
+
+**Multimodal chat — text + images + audio + video**
+
+Designed for [NVIDIA Nemotron 3 Nano Omni](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16) and any HuggingFace multimodal model with `trust_remote_code` support. Falls back to text-only inference when no media is supplied.
+
+**Supported models:**
+| Model | Modalities | Notes |
+|---|---|---|
+| `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16` | text, image, audio, video | 30B MoE, 3B active — RTX 4090 + 64GB RAM |
+| `Qwen/Qwen3-Omni` | text, image, audio | MoE, trust_remote_code |
+| Any HF vision-language model | text, image | AutoProcessor compatible |
+
+**Request body:**
+
+```json
+{
+  "model": "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is in this image?",
+      "images": ["<base64-encoded-image OR https://... URL>"]
+    }
+  ],
+  "max_tokens": 512,
+  "temperature": 0.7,
+  "stream": false,
+  "timeout": 180
+}
+```
+
+**Media fields (all optional, all per-message):**
+
+| Field | Type | Format | Notes |
+|---|---|---|---|
+| `images` | `string[]` | base64 or `https://` URL | Multiple images supported |
+| `audio` | `string` | base64 WAV/MP3/FLAC | Single audio clip per message |
+| `video` | `string` | base64 MP4 or `https://` URL | Single video per message |
+
+**Example — image analysis:**
+
+```bash
+IMAGE_B64=$(base64 -w0 photo.jpg)
+curl -X POST http://localhost:8005/chat/multimodal \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16\",
+    \"messages\": [{
+      \"role\": \"user\",
+      \"content\": \"Describe this image in detail\",
+      \"images\": [\"$IMAGE_B64\"]
+    }],
+    \"max_tokens\": 512
+  }"
+```
+
+**Example — streaming with image:**
+
+```bash
+curl -N -X POST http://localhost:8005/chat/multimodal \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+    "messages": [{"role": "user", "content": "What do you see?", "images": ["<base64>"]}],
+    "stream": true
+  }'
+```
+
+**Response (non-streaming):**
+
+```json
+{
+  "reply": "The image shows...",
+  "model": "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+  "multimodal": true
+}
+```
+
+**Memory behaviour:**
+- Uses `device_map="auto"` — VRAM fills first, overflow to system RAM
+- Auto 4-bit quantization (NF4 via bitsandbytes) for models >14GB
+- Nemotron 30B BF16 (~60GB): fits on RTX 4090 16GB + 64GB DDR5 with quant
+- Text-only messages route to the existing `/chat` path transparently
+
+**Kernel integration:**
+Wire `POST http://<host>:8005/chat/multimodal` in Kernel's config.
+Telegram images/voice notes forwarded as base64 map directly to `images`/`audio` fields.
 
 **List all available models**
 
