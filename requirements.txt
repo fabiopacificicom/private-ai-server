@@ -2,7 +2,11 @@ fastapi>=0.95.0
 uvicorn[standard]>=0.22.0
 vllm>=0.4.0
 torch>=2.2.0
-transformers>=4.35.0
+transformers>=4.40.0
 pydantic>=1.10.0
 accelerate
-hf_xet-1.2.0
+huggingface-hub
+bitsandbytes
+Pillow
+soundfile
+numpy

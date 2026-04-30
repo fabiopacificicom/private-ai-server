@@ -1417,4 +1417,403 @@ async def health():
     }
 
 
+# ---------------------------------------------------------------------------
+# Multimodal endpoint — /chat/multimodal
+# Supports text + image / audio / video via base64 or URL.
+# Designed for Nemotron 3 Nano Omni (and any trust_remote_code multimodal model).
+# Falls back gracefully to text-only if no media is supplied.
+# ---------------------------------------------------------------------------
+
+import base64
+import io
+import tempfile
+from pathlib import Path as _Path
+
+class MultimodalMessage(BaseModel):
+    """A single turn in a multimodal conversation."""
+    role: str                          # "user" | "assistant" | "system"
+    content: str                       # text content
+    images: Optional[List[str]] = None # base64-encoded images OR http(s) URLs
+    audio:  Optional[str] = None       # base64-encoded audio (wav/mp3/flac)
+    video:  Optional[str] = None       # base64-encoded video (mp4) OR http(s) URL
+
+
+class MultimodalChatRequest(BaseModel):
+    model: str
+    messages: List[MultimodalMessage]
+    max_tokens: int = 512
+    temperature: float = 0.7
+    stream: bool = False
+    timeout: Optional[int] = 180
+
+
+# Cache for multimodal processor objects (separate from model_cache tokenizers)
+_mm_processor_cache: dict = {}
+
+
+def _load_multimodal_model(model_name: str):
+    """
+    Load a multimodal model + processor into the shared model_cache.
+    Uses device_map='auto' so VRAM + RAM are used transparently (MoE friendly).
+    Always uses trust_remote_code=True (required for custom architectures like NemotronH).
+    """
+    global current_model_name
+
+    if current_model_name == model_name and model_name in model_cache:
+        return
+
+    _evict_lru_if_needed()
+
+    log.info("[multimodal] Loading model + processor: %s", model_name)
+    local_path = _resolve_model_cache_path(model_name)
+    load_from = local_path if local_path else model_name
+
+    try:
+        from transformers import AutoProcessor, AutoModelForCausalLM
+        import torch as _torch
+
+        processor = AutoProcessor.from_pretrained(
+            load_from,
+            trust_remote_code=True,
+        )
+
+        load_kwargs = dict(
+            trust_remote_code=True,
+            device_map="auto",   # splits across VRAM + RAM automatically
+        )
+
+        # Apply 4-bit quantization for very large models if bitsandbytes available
+        try:
+            model_size = sum(
+                f.stat().st_size for f in _Path(load_from).rglob("*.safetensors")
+            ) if _Path(load_from).exists() else 0
+        except Exception:
+            model_size = 0
+
+        if bitsandbytes_available and model_size > 14 * 1024**3:
+            from transformers import BitsAndBytesConfig
+            log.info("[multimodal] Applying 4-bit quantization (model size %.1fGB)", model_size / 1024**3)
+            load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=_torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+        else:
+            load_kwargs["torch_dtype"] = _torch.bfloat16
+
+        model = AutoModelForCausalLM.from_pretrained(load_from, **load_kwargs)
+        model.eval()
+
+        model_cache[model_name] = {"model": model, "tokenizer": processor, "backend": "multimodal"}
+        _mm_processor_cache[model_name] = processor
+        current_model_name = model_name
+        log.info("[multimodal] Model ready: %s", model_name)
+
+    except Exception as e:
+        _record_failed_load(model_name)
+        log.exception("[multimodal] Failed to load %s", model_name)
+        raise RuntimeError(f"Failed to load multimodal model '{model_name}': {e}")
+
+
+def _decode_media(b64_or_url: str, suffix: str) -> str:
+    """Decode base64 payload to a temp file. Returns the file path.
+    If the value starts with http(s)://, download it instead.
+    """
+    if b64_or_url.startswith("http://") or b64_or_url.startswith("https://"):
+        import urllib.request
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        urllib.request.urlretrieve(b64_or_url, tmp.name)
+        return tmp.name
+    # strip data: URL prefix if present
+    if "," in b64_or_url[:80]:
+        b64_or_url = b64_or_url.split(",", 1)[1]
+    data = base64.b64decode(b64_or_url)
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.write(data)
+    tmp.flush()
+    return tmp.name
+
+
+def _build_mm_inputs(processor, messages: List[MultimodalMessage]):
+    """
+    Build processor inputs from a list of MultimodalMessages.
+    Assembles a prompt string and collects PIL images / audio tensors / video frames
+    according to the processor's apply_chat_template when available.
+    """
+    from PIL import Image as _PILImage
+    import torch as _torch
+
+    pil_images = []
+    audio_inputs = []
+    video_inputs = []
+    tmp_files = []
+
+    # Build conversation dict list for apply_chat_template
+    conv = []
+    for msg in messages:
+        content_parts = []
+
+        # Images
+        if msg.images:
+            for img_b64 in msg.images:
+                fpath = _decode_media(img_b64, ".jpg")
+                tmp_files.append(fpath)
+                pil_images.append(_PILImage.open(fpath).convert("RGB"))
+                content_parts.append({"type": "image"})
+
+        # Audio
+        if msg.audio:
+            fpath = _decode_media(msg.audio, ".wav")
+            tmp_files.append(fpath)
+            audio_inputs.append(fpath)
+            content_parts.append({"type": "audio"})
+
+        # Video
+        if msg.video:
+            fpath = _decode_media(msg.video, ".mp4")
+            tmp_files.append(fpath)
+            video_inputs.append(fpath)
+            content_parts.append({"type": "video"})
+
+        content_parts.append({"type": "text", "text": msg.content})
+        conv.append({"role": msg.role, "content": content_parts})
+
+    # Try apply_chat_template (most modern multimodal models support it)
+    try:
+        prompt = processor.apply_chat_template(
+            conv,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    except Exception:
+        # Fallback: plain text concat
+        prompt = "\n".join(f"{m.role}: {m.content}" for m in messages)
+        prompt += "\nassistant:"
+
+    # Build processor kwargs
+    proc_kwargs = {"text": prompt, "return_tensors": "pt"}
+    if pil_images:
+        proc_kwargs["images"] = pil_images
+    if audio_inputs:
+        # Load audio as numpy via soundfile
+        try:
+            import soundfile as sf
+            import numpy as np
+            audios = [sf.read(p)[0].astype(np.float32) for p in audio_inputs]
+            proc_kwargs["audio"] = audios
+        except ImportError:
+            log.warning("[multimodal] soundfile not installed — audio skipped")
+    if video_inputs:
+        proc_kwargs["videos"] = video_inputs  # processor handles frame extraction
+
+    inputs = processor(**proc_kwargs)
+
+    # Cleanup temp files
+    for f in tmp_files:
+        try:
+            import os as _os
+            _os.unlink(f)
+        except Exception:
+            pass
+
+    return inputs
+
+
+def _run_multimodal_inference(model_name: str, messages: List[MultimodalMessage],
+                              max_tokens: int, temperature: float) -> str:
+    """Synchronous inference — runs in a thread via asyncio.to_thread."""
+    import torch as _torch
+
+    cached = model_cache.get(model_name)
+    if not cached:
+        raise RuntimeError(f"Model '{model_name}' not loaded.")
+
+    model = cached["model"]
+    processor = _mm_processor_cache.get(model_name) or cached["tokenizer"]
+
+    inputs = _build_mm_inputs(processor, messages)
+
+    # Move inputs to the model's first device
+    device = next(model.parameters()).device
+    inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
+
+    gen_kwargs = dict(
+        max_new_tokens=max_tokens,
+        do_sample=temperature > 0,
+        temperature=temperature if temperature > 0 else 1.0,
+        pad_token_id=processor.tokenizer.eos_token_id
+            if hasattr(processor, "tokenizer") else processor.eos_token_id,
+    )
+
+    with _torch.inference_mode():
+        output_ids = model.generate(**inputs, **gen_kwargs)
+
+    # Decode only the newly generated tokens
+    input_len = inputs["input_ids"].shape[-1]
+    new_ids = output_ids[:, input_len:]
+    tok = processor.tokenizer if hasattr(processor, "tokenizer") else processor
+    reply = tok.decode(new_ids[0], skip_special_tokens=True).strip()
+    return reply
+
+
+async def _stream_multimodal_response(model_name: str, messages: List[MultimodalMessage],
+                                      max_tokens: int, temperature: float):
+    """SSE generator for multimodal streaming (uses TextIteratorStreamer)."""
+    import json as _json
+    import torch as _torch
+    from threading import Thread
+
+    try:
+        from transformers import TextIteratorStreamer
+    except ImportError:
+        yield f"data: {_json.dumps({'error': 'TextIteratorStreamer not available', 'done': True})}\n\n"
+        return
+
+    cached = model_cache.get(model_name)
+    if not cached:
+        yield f"data: {_json.dumps({'error': f'Model {model_name!r} not loaded', 'done': True})}\n\n"
+        return
+
+    model = cached["model"]
+    processor = _mm_processor_cache.get(model_name) or cached["tokenizer"]
+    tok = processor.tokenizer if hasattr(processor, "tokenizer") else processor
+
+    inputs = _build_mm_inputs(processor, messages)
+    device = next(model.parameters()).device
+    inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
+
+    streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True)
+    gen_kwargs = dict(
+        **inputs,
+        max_new_tokens=max_tokens,
+        do_sample=temperature > 0,
+        temperature=temperature if temperature > 0 else 1.0,
+        streamer=streamer,
+    )
+
+    thread = Thread(target=model.generate, kwargs=gen_kwargs, daemon=True)
+    thread.start()
+
+    try:
+        for token_text in streamer:
+            chunk = _json.dumps({"delta": {"content": token_text}, "done": False})
+            yield f"data: {chunk}\n\n"
+        yield f"data: {_json.dumps({'delta': {'content': ''}, 'done': True})}\n\n"
+    except Exception as e:
+        yield f"data: {_json.dumps({'error': str(e), 'done': True})}\n\n"
+    finally:
+        thread.join(timeout=5)
+
+
+@app.post("/chat/multimodal")
+async def chat_multimodal(request: MultimodalChatRequest):
+    """
+    Multimodal chat endpoint.
+
+    Accepts text + optional base64-encoded images, audio, and video.
+    Designed for Nemotron 3 Nano Omni and any HuggingFace multimodal model
+    that supports trust_remote_code + AutoProcessor.
+
+    Request body:
+    {
+      "model": "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is in this image?",
+          "images": ["<base64>"]
+        }
+      ],
+      "max_tokens": 512,
+      "stream": false
+    }
+
+    Images can also be passed as http(s) URLs instead of base64.
+    If no media fields are set, falls back to text-only inference via the
+    standard load_model path.
+    """
+    model_name = request.model
+    timeout_seconds = max(1, min(request.timeout or 180, 600))
+
+    has_media = any(
+        (m.images or m.audio or m.video)
+        for m in request.messages
+    )
+
+    # Ensure model is loaded (multimodal-aware)
+    if model_name not in model_cache:
+        try:
+            if has_media:
+                await asyncio.to_thread(_load_multimodal_model, model_name)
+            else:
+                await asyncio.to_thread(load_model, model_name)
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=str(e))
+    elif has_media and model_name not in _mm_processor_cache:
+        # Model loaded as text-only before — reload with processor
+        try:
+            await asyncio.to_thread(_load_multimodal_model, model_name)
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+    # Streaming
+    if request.stream:
+        if has_media:
+            return StreamingResponse(
+                _stream_multimodal_response(
+                    model_name, request.messages,
+                    request.max_tokens, request.temperature
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
+        else:
+            # Text-only streaming: reuse existing streamer
+            text_messages = [{"role": m.role, "content": m.content} for m in request.messages]
+            return StreamingResponse(
+                _stream_chat_response(
+                    model_name, text_messages,
+                    request.max_tokens, request.temperature
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
+
+    # Non-streaming
+    def cleanup_on_timeout():
+        if torch is not None and torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+        gc.collect()
+
+    if has_media:
+        async def _run():
+            reply = await asyncio.to_thread(
+                _run_multimodal_inference,
+                model_name, request.messages,
+                request.max_tokens, request.temperature
+            )
+            return {"reply": reply, "model": model_name, "multimodal": True}
+
+        return await _with_timeout(_run(), timeout_seconds, cleanup_on_timeout)
+    else:
+        # Text-only: delegate to existing non-streaming path
+        text_request = ChatRequest(
+            model=model_name,
+            messages=[{"role": m.role, "content": m.content} for m in request.messages],
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            stream=False,
+            timeout=timeout_seconds,
+        )
+        return await _with_timeout(
+            _chat_non_streaming(text_request, model_name),
+            timeout_seconds, cleanup_on_timeout
+        )
+
+
 # Run: uvicorn app:app --host 0.0.0.0 --port 8005

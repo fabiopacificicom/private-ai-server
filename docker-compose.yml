@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  ai-server:
+    build: .
+    container_name: ai-server
+    ports:
+      - "8005:8005"
+    volumes:
+      # Mount HF model cache so models don't re-download on rebuild
+      - ai_server_models:/root/.cache/huggingface
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_DISABLE_SYMLINKS=1        # Windows-safe
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  ai_server_models:
