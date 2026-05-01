@@ -41,7 +41,8 @@ A high-performance, GPU-optimized FastAPI server for serving Hugging Face langua
 ```powershell
 git clone <repo-url>
 cd ai-server-py
-python -m venv .venv .\.venv\Scripts\Activate.ps1
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 ```
 
 2. **Install dependencies:**
@@ -65,20 +66,37 @@ pip install -r requirements.txt
 python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ```
 
-### Using a .env to control model cache location
+### WSL2 Startup (Linux / vLLM mode)
 
-You can set a `.env` file in the repository root to override environment variables used by the server (no extra Python packages required). Example: create a `.env` file with:
+For full vLLM performance on WSL2 (or a native Linux machine):
 
+```bash
+bash scripts/start-wsl-server.sh
 ```
+
+The script:
+- Creates a dedicated `.venv-wsl` virtual environment if missing
+- Installs requirements
+- Exports env vars from `.env`
+- Starts the server with `--reload` on `0.0.0.0:8005`
+
+> **HF_HOME in WSL:** Set `HF_HOME` in your `.env` to point to the drive where your models live (e.g. `/mnt/d/ai-server-models`). The script exports it automatically.
+
+### HF_HOME — Model Cache Location
+
+Create a `.env` file in the repo root to control where models are stored:
+
+```ini
 # .env (example)
-HF_HOME=D:\ai-server-models
+HF_HOME=D:\ai-server-models          # Windows
+# HF_HOME=/mnt/d/ai-server-models    # WSL2
 TRANSFORMERS_CACHE=D:\ai-server-models\transformers
-# optional: MAX_CACHE_MODELS=1
+# MAX_CACHE_MODELS=1
 ```
 
-The server reads `.env` on startup (or on reload) and will prefer `HF_HOME` when deciding where to store downloaded models. This makes it easy to place the model cache on `D:` instead of `C:`.
+The server reads `.env` at startup. `HF_HOME` determines where downloaded models live — point it at a drive with enough space (models can be 1–70 GB each).
 
-There is also a supplied [`.env.example`](.env.example) you can copy and edit.
+Copy [`.env.example`](.env.example) as a starting point.
 
 ### First Steps
 
@@ -344,6 +362,15 @@ curl -N -X POST http://localhost:8005/chat/multimodal \
 **Kernel integration:**
 Wire `POST http://<host>:8005/chat/multimodal` in Kernel's config.
 Telegram images/voice notes forwarded as base64 map directly to `images`/`audio` fields.
+
+**olly-voice-server integration:**
+This server is used as the LLM brain for [olly-voice-server](https://github.com/fabiopacifici-bot/olly-voice-server). Configure the voice server with:
+
+```env
+LLM_URL=http://host.docker.internal:8005
+```
+
+The voice server sends text (and optionally audio) to `/chat` or `/chat/multimodal` and streams the response back as synthesised speech. On WSL2, the server is reachable from Docker containers via `host.docker.internal:8005`.
 
 **List all available models**
 
