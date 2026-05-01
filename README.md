@@ -625,6 +625,22 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 
 ---
 
+## Integration — olly-voice-server
+
+This server is used as the LLM brain for [olly-voice-server](https://github.com/fabiopacificicom/olly-voice-server), a local voice assistant that chains STT → LLM → TTS.
+
+```bash
+# Start this server first (port 8005), then run olly-voice:
+docker run --gpus all -p 8766:8766 \
+  -e LLM_URL=http://host.docker.internal:8005 \
+  -e LLM_MODEL=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16 \
+  olly-voice
+```
+
+The `/chat/multimodal` endpoint is the recommended backend for voice pipelines as it natively handles audio input.
+
+---
+
 ## Security
 
  **Important**: This server downloads and executes model code from Hugging Face Hub.
