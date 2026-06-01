@@ -9,5 +9,5 @@ bin/
 jobs.db
 test_jobs.db
 .vscode/
-E:*
-E:\\*
+E*
+.venv-wsl/
