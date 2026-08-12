@@ -143,9 +143,10 @@ class TestChatValidation:
 
     def test_chat_nonexistent_model_returns_4xx(self, client):
         """Requesting a model that isn't downloaded should yield a 4xx error."""
-        # load_model raises a RuntimeError containing 'not available locally'
+        # load_model is now imported in routes.chat; mock it there
+        import routes.chat as _chat_module
         with mock.patch.object(
-            _app_module, "load_model",
+            _chat_module, "load_model",
             side_effect=RuntimeError("Model 'nonexistent/model' not available locally. Use POST /pull to download it first.")
         ):
             resp = client.post("/chat", json={
