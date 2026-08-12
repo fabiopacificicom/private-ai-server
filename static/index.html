@@ -45,6 +45,25 @@
       gap: 1rem;
       overflow-y: auto;
     }
+    /* Narrow, subtle scrollbar (WebKit/Chromium) */
+    .sidebar::-webkit-scrollbar {
+      width: 6px;
+    }
+    .sidebar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .sidebar::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+    .sidebar::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
+    }
+    /* Firefox */
+    .sidebar {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
     .sidebar h5 { color: var(--text); font-weight: 600; margin: 0; display: flex; align-items: center; gap: 0.5rem; }
     .sidebar .section { display: flex; flex-direction: column; gap: 0.5rem; }
     .sidebar label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 0; }
