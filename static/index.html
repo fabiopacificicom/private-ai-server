@@ -194,6 +194,15 @@
     </div>
 
     <div class="section">
+      <label>Pull model</label>
+      <input id="pullInput" class="form-control form-control-sm" placeholder="hf.co/org/repo or path.gguf">
+      <div class="d-flex gap-2">
+        <button id="pullBtn" class="btn btn-outline-primary btn-sm flex-fill"><i class="fas fa-download me-1"></i>Pull</button>
+      </div>
+      <div id="pullStatus" class="small" style="color:var(--text-muted); font-size:0.75rem; display:none;"></div>
+    </div>
+
+    <div class="section">
       <label>Actions</label>
       <button id="refreshModels" class="btn btn-outline-secondary btn-sm"><i class="fas fa-sync-alt me-1"></i>Refresh models</button>
       <button id="clearChat" class="btn btn-outline-secondary btn-sm"><i class="fas fa-trash me-1"></i>Clear chat</button>

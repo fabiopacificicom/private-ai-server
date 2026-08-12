@@ -337,6 +337,65 @@ function addCopyButton(wrap, text) {
 }
 
 // ------------------------------------------------------------------
+// Pull model
+// ------------------------------------------------------------------
+async function pullModel() {
+  const input = document.getElementById('pullInput');
+  const status = document.getElementById('pullStatus');
+  const model = input.value.trim();
+  if (!model) {
+    alert('Enter a model id to pull (e.g. hf.co/org/repo or path.gguf)');
+    return;
+  }
+  status.style.display = 'block';
+  status.textContent = 'Starting pull of ' + model + '…';
+  document.getElementById('pullBtn').disabled = true;
+  try {
+    const res = await fetch('/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model, quantize: 'auto', init: false }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const jobId = data.job_id;
+    status.textContent = 'Pulling… (job ' + jobId.slice(0, 8) + ')';
+
+    // Poll job progress
+    const poll = setInterval(async () => {
+      try {
+        const jres = await fetch('/jobs/' + jobId);
+        const job = await jres.json();
+        if (job.status === 'succeeded') {
+          clearInterval(poll);
+          status.textContent = '✅ Pulled ' + model;
+          document.getElementById('pullBtn').disabled = false;
+          input.value = '';
+          refreshModels();
+        } else if (job.status === 'failed') {
+          clearInterval(poll);
+          status.textContent = '❌ Failed: ' + (job.error || 'unknown error');
+          status.style.color = 'var(--danger)';
+          document.getElementById('pullBtn').disabled = false;
+        } else {
+          const dl = job.downloaded_bytes || 0;
+          const gb = (dl / (1024 ** 3)).toFixed(2);
+          status.textContent = 'Downloading… ' + gb + ' GB';
+        }
+      } catch (e) {
+        clearInterval(poll);
+        status.textContent = 'Error polling job';
+        document.getElementById('pullBtn').disabled = false;
+      }
+    }, 2000);
+  } catch (err) {
+    status.textContent = '❌ ' + err.message;
+    status.style.color = 'var(--danger)';
+    document.getElementById('pullBtn').disabled = false;
+  }
+}
+
+// ------------------------------------------------------------------
 // Event wiring
 // ------------------------------------------------------------------
 function init() {
@@ -356,6 +415,10 @@ function init() {
     els.tokens.textContent = '—';
     els.tokPerSec.textContent = '—';
     els.genTime.textContent = '—';
+  });
+  document.getElementById('pullBtn').addEventListener('click', pullModel);
+  document.getElementById('pullInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); pullModel(); }
   });
   els.stop.addEventListener('click', () => {
     if (abortController) abortController.abort();
