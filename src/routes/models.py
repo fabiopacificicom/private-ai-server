@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 import config
 import state
+from classify import classify_modality, check_services
 import model_cache as mcache
 from loader import load_model, resolve_model_cache_path, calculate_downloaded_bytes, save_manifest
 from database import get_job_db
@@ -154,6 +155,7 @@ async def list_models():
             "size_bytes": meta.get("size_bytes"),
             "local_path": meta.get("local_path"),
             "load_duration": meta.get("load_duration_ns"),
+            "modality": classify_modality(name),
         })
 
     try:
@@ -184,7 +186,7 @@ async def list_models():
                     models.append({
                         "model": repo_id, "description": None, "loaded": False,
                         "backend": None, "size_bytes": size, "local_path": snapshot_path,
-                        "load_duration": None,
+                        "load_duration": None, "modality": classify_modality(repo_id),
                     })
                     seen_repos.add(repo_id)
 
@@ -205,6 +207,7 @@ async def list_models():
                         "model": gguf_path, "description": "GGUF (not loadable - requires llama.cpp backend)",
                         "loaded": False, "backend": None, "size_bytes": sz,
                         "local_path": gguf_path, "load_duration": None,
+                        "modality": classify_modality(gguf_path),
                     })
                     seen_guuf.add(gguf_path)
     except Exception:
@@ -224,12 +227,13 @@ async def list_models():
                 "local_path": m["local_path"],
                 "size_bytes": m.get("size_bytes"),
             }
+            m["modality"] = classify_modality(name)
             models.append(m)
     except Exception:
         config.log.exception("Error discovering Ollama models")
 
     save_manifest()
-    return {"models": models}
+    return {"models": models, "services": check_services()}
 
 
 @router.post(

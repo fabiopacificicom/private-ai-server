@@ -54,6 +54,19 @@ class TestApiTags:
             assert "name" in m
             assert "model" in m
 
+    def test_tags_models_have_modality(self):
+        resp = _get("/api/tags")
+        data = json.loads(resp.read())
+        if data["models"]:
+            m = data["models"][0]
+            assert "modality" in m
+            assert m["modality"] in ("chat", "vision", "imagegen", "voice", "embeddings", "unknown")
+
+    def test_tags_has_services(self):
+        resp = _get("/api/tags")
+        data = json.loads(resp.read())
+        assert "services" in data
+
 
 class TestApiChatValidation:
     def test_chat_missing_model_returns_4xx(self):

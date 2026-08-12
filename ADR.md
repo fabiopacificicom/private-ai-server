@@ -125,6 +125,29 @@ The server must:
 - **Disable HF symlinks on Windows (`HF_HUB_DISABLE_SYMLINKS=1`).**
   *Implicit alternative:* rely on symlinks (fails with WinError 1314 without Developer Mode).
   *Chosen:* copy files instead to avoid privilege errors.
+- **Modality classification + sibling-server orchestration.**
+  *Implicit alternative:* treat every discovered model as a chat model.
+  *Chosen:* classify models by modality (`chat`, `vision`, `imagegen`, `voice`,
+  `embeddings`) and treat image/voice as handled by dedicated sibling servers
+  (Open Fantasia :8765, Olly Voice :8766). This server probes their availability
+  and, in later phases, routes to them or prompts the user to install them. This
+  keeps `private-ai-server` as a text/vision brain while offering a unified entry
+  point to the full local inference stack.
+
+## Sibling servers
+
+This server is part of a **microservices-based local inference stack**. Each sibling
+owns a modality and exposes its own HTTP API:
+
+| Server | Port | Modality | Repo |
+|--------|------|----------|------|
+| **private-ai-server** | 8005 / 11434 | Text + vision-to-text | this repo |
+| **Open Fantasia** | 8765 | Image generation | `open-fantasia-imagegen` |
+| **Olly Voice** | 8766 | STT / TTS / voice chat | `olly-voice-server` |
+
+The model scanner discovers models from all of these, so the classification prevents
+presenting image/voice models as text-chat models. Availability of each sibling is
+probed via `/health` and exposed in `/api/tags` and `/models`.
 
 ## Constraints
 

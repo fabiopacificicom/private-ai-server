@@ -65,15 +65,53 @@ async function refreshModels() {
     const tags = await tagsRes.json();
     const health = await healthRes.json();
     const models = tags.models || [];
+    const services = tags.services || {};
 
     const prev = els.model.value;
     els.model.innerHTML = '<option value="">Select a model</option>';
+
+    // Group models by modality
+    const groups = {
+      chat: [],
+      vision: [],
+      imagegen: [],
+      voice: [],
+      embeddings: [],
+      unknown: [],
+    };
     models.forEach((m) => {
-      const opt = document.createElement('option');
-      opt.value = m.model;
-      opt.text = m.name;
-      els.model.appendChild(opt);
+      const mod = m.modality || 'unknown';
+      if (!groups[mod]) groups[mod] = [];
+      groups[mod].push(m);
     });
+
+    const groupLabels = {
+      chat: 'Chat',
+      vision: 'Vision',
+      imagegen: 'Image Gen',
+      voice: 'Voice',
+      embeddings: 'Embeddings',
+      unknown: 'Other',
+    };
+    const groupOrder = ['chat', 'vision', 'imagegen', 'voice', 'embeddings', 'unknown'];
+
+    groupOrder.forEach((mod) => {
+      const list = groups[mod];
+      if (!list || list.length === 0) return;
+      const og = document.createElement('optgroup');
+      og.label = groupLabels[mod];
+      list.forEach((m) => {
+        const opt = document.createElement('option');
+        opt.value = m.model;
+        opt.text = m.name;
+        // Only chat/vision models are usable for chat on this server
+        const usable = mod === 'chat' || mod === 'vision';
+        if (!usable) opt.disabled = true;
+        og.appendChild(opt);
+      });
+      els.model.appendChild(og);
+    });
+
     if (prev) els.model.value = prev;
     els.modelCount.textContent = models.length;
 
@@ -104,10 +142,18 @@ function updateModelMeta() {
       const m = (data.models || []).find((x) => x.model === name);
       if (m) {
         els.modelMeta.style.display = 'block';
-        els.modelMeta.innerHTML =
+        let html =
           'Backend: <b>' + (m.backend || '—') + '</b><br>' +
+          'Modality: <b>' + (m.modality || 'unknown') + '</b><br>' +
           'Size: <b>' + fmtBytes(m.size_bytes) + '</b><br>' +
           'Loaded: <b>' + (m.loaded ? 'yes' : 'no') + '</b>';
+        // Show a hint for models handled by sibling servers
+        if (m.modality === 'imagegen') {
+          html += '<br><span style="color:var(--warning)">→ Open Fantasia (:8765)</span>';
+        } else if (m.modality === 'voice') {
+          html += '<br><span style="color:var(--warning)">→ Olly Voice (:8766)</span>';
+        }
+        els.modelMeta.innerHTML = html;
       }
     })
     .catch(() => {});

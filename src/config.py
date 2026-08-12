@@ -114,6 +114,10 @@ MODELS_EXTRA_SCAN_DIRS: list = [
 # Root of an existing Ollama install's model store (manifests + sha256 blobs).
 # When set, the server discovers Ollama models and can serve them as GGUF.
 OLLAMA_MODELS_DIR: Optional[str] = os.getenv("OLLAMA_MODELS_DIR") or None
+# Sibling servers for image generation and voice. Used for model classification
+# and availability probing (Level 1 of the local-inference orchestrator).
+IMAGE_SERVER_URL: Optional[str] = os.getenv("IMAGE_SERVER_URL") or "http://127.0.0.1:8765"
+VOICE_SERVER_URL: Optional[str] = os.getenv("VOICE_SERVER_URL") or "http://127.0.0.1:8766"
 
 server_start_time: float = time.time()
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PULLS)

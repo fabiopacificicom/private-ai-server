@@ -145,6 +145,7 @@ async def ollama_tags():
     # Reuse the internal /models listing logic
     models_resp = await list_models()
     models = models_resp.get("models", [])
+    services = models_resp.get("services", {})
 
     ollama_models = []
     for m in models:
@@ -153,6 +154,7 @@ async def ollama_tags():
             "name": m["model"],
             "model": m["model"],
             "size": m.get("size_bytes") or 0,
+            "modality": m.get("modality", "unknown"),
             "digest": "sha256:" + str(abs(hash(m["model"]))),
             "details": {
                 "format": "gguf" if (m.get("backend") == "gguf_llama_cpp") else "safetensors",
@@ -162,4 +164,4 @@ async def ollama_tags():
             },
         })
 
-    return {"models": ollama_models, "total_duration": 0}
+    return {"models": ollama_models, "total_duration": 0, "services": services}
