@@ -1,0 +1,43 @@
+graph TD
+  Client["🧑 Client\nHTTP / JSON, Ollama-compatible"]
+  App["🚀 FastAPI app.py\nentry point + exception handler"]
+
+  Chat["💬 /chat\n+ /chat/multimodal"]
+  Models["📦 /models + /pull"]
+  Jobs["📋 /jobs"]
+  System["🩺 /health /status /diag"]
+
+  Loader["⚙️ loader.py\nload_model() dispatcher"]
+  Cache["🧠 model_cache.py\nLRU + cooldown"]
+  State["🗃️ state.py\nshared state"]
+  GGUF["🦙 gguf.py\nllama-cpp backend"]
+  MM["🖼️ multimodal.py\nimage/audio/video"]
+  DB["🗄️ database.py\nSQLite jobs"]
+  Manifest["📄 models_manifest.json"]
+
+  Backends["Backends"]
+  VLLM["vLLM"]
+  TF["Transformers\n+ bitsandbytes"]
+  LLAMA["llama.cpp\n(GGUF)"]
+
+  Client --> App
+  App --> Chat
+  App --> Models
+  App --> Jobs
+  App --> System
+
+  Chat --> Loader
+  Chat --> MM
+  Loader --> Cache
+  Loader --> State
+  Loader --> GGUF
+  Loader --> Backends
+  Backends --> VLLM
+  Backends --> TF
+  Backends --> LLAMA
+  MM --> State
+  Models --> Loader
+  Models --> Manifest
+  Jobs --> DB
+  System --> DB
+  System --> State
