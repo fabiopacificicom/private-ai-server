@@ -1,0 +1,18 @@
+{
+  "name": "private-ai-desktop",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Desktop wrapper for the Private AI Inference Server UI (Tauri)",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

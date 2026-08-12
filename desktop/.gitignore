@@ -1,0 +1,9 @@
+# Node
+node_modules/
+
+# Rust / Tauri build output
+src-tauri/target/
+src-tauri/gen/
+
+# Generated icon script (icons are committed)
+gen_icon.py
