@@ -232,7 +232,7 @@ async function sendChat() {
     let totalDurationNs = 0;
 
     if (payload.stream) {
-      // SSE streaming
+      // Ollama NDJSON streaming (one JSON object per line)
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -250,16 +250,16 @@ async function sendChat() {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
+        const lines = buffer.split('\n');
         buffer = lines.pop();
         for (const line of lines) {
-          if (!line.startsWith('data:')) continue;
-          const jsonStr = line.slice(5).trim();
-          if (!jsonStr) continue;
+          const trimmed = line.trim();
+          if (!trimmed) continue;
           try {
-            const chunk = JSON.parse(jsonStr);
-            if (chunk.delta && chunk.delta.content) {
-              fullText += chunk.delta.content;
+            const chunk = JSON.parse(trimmed);
+            // Ollama streams message.content deltas
+            if (chunk.message && chunk.message.content) {
+              fullText += chunk.message.content;
               if (!assistantBubble) {
                 assistantBubble = document.createElement('div');
                 assistantBubble.className = 'msg assistant';

@@ -55,15 +55,22 @@ def _extract_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return mapped
 
 
-def _ollama_response(model: str, content: str) -> Dict[str, Any]:
-    """Build an Ollama-shaped chat response."""
-    return {
+def _ollama_response(model: str, content: str, stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Build an Ollama-shaped chat response, carrying through timing/usage stats."""
+    resp: Dict[str, Any] = {
         "model": model,
         "created_at": datetime.utcnow().isoformat() + "Z",
         "message": {"role": "assistant", "content": content},
         "done": True,
         "done_reason": "stop",
     }
+    if stats:
+        # Carry through the usage/timing fields the internal engine provides
+        for key in ("total_duration", "load_duration", "prompt_eval_count",
+                    "prompt_eval_duration", "eval_count", "eval_duration"):
+            if key in stats:
+                resp[key] = stats[key]
+    return resp
 
 
 @router.post(
@@ -71,7 +78,7 @@ def _ollama_response(model: str, content: str) -> Dict[str, Any]:
     summary="Ollama-compatible chat completion",
     description=(
         "Mirrors Ollama's `POST /api/chat`. Accepts `{model, messages, stream, options}` "
-        "and returns an Ollama-shaped response. Set `stream: true` for SSE chunks."
+        "and returns an Ollama-shaped response. Set `stream: true` for NDJSON chunks."
     ),
 )
 async def ollama_chat(request: OllamaChatRequest):
@@ -89,16 +96,37 @@ async def ollama_chat(request: OllamaChatRequest):
     )
 
     if request.stream:
-        # SSE chunks shaped like Ollama
-        async def _sse():
+        # Ollama streams NDJSON (one JSON object per line, no "data:" prefix)
+        async def _ndjson():
             async for chunk in _stream_chat(
                 chat_req.model, chat_req.messages, chat_req.max_tokens, chat_req.temperature
             ):
-                # _stream_chat yields "data: {json}\n\n"; re-shape to Ollama format
-                yield chunk
+                # Re-shape the internal SSE chunk into an Ollama message chunk
+                line = chunk.strip()
+                if line.startswith("data:"):
+                    line = line[len("data:"):].strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    continue
+                if data.get("done"):
+                    # Final chunk with stats
+                    yield json.dumps(data) + "\n"
+                    continue
+                delta = data.get("delta", {}).get("content", "")
+                if delta:
+                    out = {
+                        "model": chat_req.model,
+                        "created_at": datetime.utcnow().isoformat() + "Z",
+                        "message": {"role": "assistant", "content": delta},
+                        "done": False,
+                    }
+                    yield json.dumps(out) + "\n"
 
         return StreamingResponse(
-            _sse(),
+            _ndjson(),
             media_type="application/x-ndjson",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
@@ -108,7 +136,7 @@ async def ollama_chat(request: OllamaChatRequest):
         _chat_non_streaming(chat_req, chat_req.model), timeout_s, gpu_cleanup_fn
     )
     content = result.get("message", {}).get("content", "")
-    return _ollama_response(request.model, content)
+    return _ollama_response(request.model, content, stats=result)
 
 
 @router.get("/tags", summary="Ollama-compatible model list")
