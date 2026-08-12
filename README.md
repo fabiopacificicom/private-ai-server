@@ -66,6 +66,23 @@ pip install -r requirements.txt
 python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ```
 
+### Desktop App (Tauri)
+
+There's a native **Windows desktop wrapper** in [`desktop/`](desktop/) that opens the
+web UI in its own window. It's a thin Tauri shell that loads `http://127.0.0.1:8005/`.
+
+```powershell
+# 1. Start the server (above), then:
+cd desktop
+npm install             # first time only
+.\build.ps1             # debug build
+.\src-tauri\target\debug\private-ai-desktop.exe
+```
+
+- Release build with installer: `.\build.ps1 -Release` (output in `src-tauri\target\release\bundle\`)
+- Prerequisites: Rust (rustup), MSVC Build Tools, WebView2 (preinstalled on Win11)
+- See [`desktop/README.md`](desktop/README.md) for full details.
+
 ### WSL2 Startup (Linux / vLLM mode)
 
 For full vLLM performance on WSL2 (or a native Linux machine):
@@ -738,8 +755,6 @@ install commands) so you can see which siblings are up and install the missing o
 > WSL-reachable address or set up WSL port forwarding so the probe can reach them.
 
 
----
-
 ## Security
 
  **Important**: This server downloads and executes model code from Hugging Face Hub.
@@ -840,7 +855,7 @@ MIT
 
 ## Roadmap
 
-**Current Version**: v0.9 (MVP Complete)
+**Current Version**: v1.1.0
 
 See [`.specs/ROADMAP.md`](.specs/ROADMAP.md) for detailed feature roadmap and timeline.
 
@@ -852,6 +867,15 @@ See [`.specs/ROADMAP.md`](.specs/ROADMAP.md) for detailed feature roadmap and ti
 - ✅ Download progress tracking
 - ✅ Persistent job storage (SQLite)
 - ✅ Improved error messages
+
+**Current Release (v1.1.0)**: ✅ Local Inference Orchestrator - COMPLETED
+
+- ✅ Model modality classification (chat / vision / imagegen / voice / embeddings)
+- ✅ Sibling-server orchestration: `POST /generate` (Open Fantasia :8765),
+  `POST /tts` (Olly Voice :8766), `GET /services`
+- ✅ Fast-fail proxy with short connect timeout + long read timeout
+- ✅ Web UI: Services panel, setup wizard, and Image/Audio generation modes
+- ✅ Tauri desktop app wrapper (`desktop/`)
 
 **Next Release (v1.5)**: Advanced Features
 
