@@ -11,3 +11,12 @@ test_jobs.db
 .vscode/
 E*
 .venv-wsl/
+# Runtime / generated artifacts
+server.log
+app_backup.py
+test_chat.py
+test_models.py
+test_load_direct.py
+test_gguf_direct.py
+test_pipeline_error.py
+models_manifest.json
