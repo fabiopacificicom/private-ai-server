@@ -82,6 +82,50 @@
       margin-top: 0.25rem;
       display: none;
     }
+    .services-panel {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.6rem;
+      margin-top: 0.25rem;
+    }
+    .services-panel .svc {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.25rem 0;
+    }
+    .services-panel .svc + .svc { border-top: 1px solid var(--border); }
+    .svc-name { font-weight: 600; }
+    .svc-install-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 0.35rem;
+      padding: 0.1rem 0.4rem;
+      font-size: 0.7rem;
+      cursor: pointer;
+    }
+    .svc-install-btn:hover { color: var(--text); border-color: var(--text-muted); }
+    .wizard-svc {
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      margin-bottom: 0.75rem;
+      background: var(--bg);
+    }
+    .wizard-svc code {
+      display: block;
+      background: var(--bg-3);
+      padding: 0.5rem;
+      border-radius: 0.4rem;
+      font-size: 0.75rem;
+      word-break: break-all;
+      margin-top: 0.5rem;
+    }
     /* Main */
     .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
     .chat-header {
@@ -203,12 +247,40 @@
     </div>
 
     <div class="section">
+      <label>Services</label>
+      <div id="servicesPanel" class="services-panel">
+        <div class="small" style="color:var(--text-muted)">Checking…</div>
+      </div>
+      <button id="setupWizardBtn" class="btn btn-outline-secondary btn-sm mt-2 w-100">
+        <i class="fas fa-wrench me-1"></i>Setup wizard
+      </button>
+    </div>
+
+    <div class="section">
       <label>Actions</label>
       <button id="refreshModels" class="btn btn-outline-secondary btn-sm"><i class="fas fa-sync-alt me-1"></i>Refresh models</button>
       <button id="clearChat" class="btn btn-outline-secondary btn-sm"><i class="fas fa-trash me-1"></i>Clear chat</button>
       <button id="stopBtn" class="btn btn-outline-danger btn-sm" disabled><i class="fas fa-stop me-1"></i>Stop</button>
     </div>
   </aside>
+
+  <!-- Setup wizard modal -->
+  <div class="modal fade" id="setupWizardModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+      <div class="modal-content" style="background:var(--bg-2); color:var(--text); border:1px solid var(--border);">
+        <div class="modal-header" style="border-color:var(--border);">
+          <h5 class="modal-title"><i class="fas fa-wrench me-2"></i>Sibling setup wizard</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body" id="setupWizardBody">
+          <div class="small" style="color:var(--text-muted)">Loading…</div>
+        </div>
+        <div class="modal-footer" style="border-color:var(--border);">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Main -->
   <main class="main">
@@ -234,7 +306,10 @@
     </div>
   </main>
 
-  <script src="/static/app.js?v=2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+    crossorigin="anonymous"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 
 </html>

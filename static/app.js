@@ -122,11 +122,109 @@ async function refreshModels() {
     els.uptime.textContent = fmtUptime(health.uptime_seconds || 0);
     els.status.textContent = models.length + ' models';
     els.status.className = 'badge bg-success';
+    renderServices(services);
     updateModelMeta();
   } catch (err) {
     console.error(err);
     els.status.textContent = 'Server unreachable';
     els.status.className = 'badge bg-danger';
+  }
+}
+
+// ------------------------------------------------------------------
+// Sibling services panel + setup wizard (Level 2 & 3)
+// ------------------------------------------------------------------
+const SERVICE_LABELS = {
+  imagegen: { name: 'Open Fantasia', port: 8765, icon: 'fa-image' },
+  voice: { name: 'Olly Voice', port: 8766, icon: 'fa-microphone' },
+};
+
+function renderServices(services) {
+  const panel = document.getElementById('servicesPanel');
+  if (!panel) return;
+  const keys = Object.keys(services || {});
+  if (keys.length === 0) {
+    panel.innerHTML = '<div class="small" style="color:var(--text-muted)">No sibling services configured.</div>';
+    return;
+  }
+  let html = '';
+  keys.forEach((key) => {
+    const svc = services[key];
+    const label = SERVICE_LABELS[key] || { name: svc.service || key, icon: 'fa-cube' };
+    const available = svc.available;
+    const badge = available
+      ? '<span class="badge bg-success">available</span>'
+      : '<span class="badge bg-warning text-dark">install</span>';
+    html +=
+      '<div class="svc">' +
+      '<span class="svc-name"><i class="fas ' + label.icon + ' me-1"></i>' + (label.name || svc.service) + '</span>' +
+      badge +
+      '</div>';
+    if (!available && svc.install) {
+      html +=
+        '<div class="d-flex align-items-center gap-2 mt-1">' +
+        '<code style="font-size:0.65rem; flex:1; word-break:break-all;">' + escapeHtml(svc.install) + '</code>' +
+        '<button class="svc-install-btn" data-copy="' + escapeHtml(svc.install) + '"><i class="fas fa-copy"></i></button>' +
+        '</div>';
+    }
+  });
+  panel.innerHTML = html;
+  // Wire copy buttons
+  panel.querySelectorAll('.svc-install-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(btn.dataset.copy);
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<i class="fas fa-check"></i>';
+      setTimeout(() => { btn.innerHTML = orig; }, 1200);
+    });
+  });
+}
+
+async function openSetupWizard() {
+  const body = document.getElementById('setupWizardBody');
+  body.innerHTML = '<div class="small" style="color:var(--text-muted)">Loading…</div>';
+  try {
+    const res = await fetch('/services');
+    const services = await res.json();
+    const keys = Object.keys(services || {});
+    if (keys.length === 0) {
+      body.innerHTML = '<div class="small" style="color:var(--text-muted)">No sibling services configured.</div>';
+      return;
+    }
+    let html = '<div class="small mb-2" style="color:var(--text-muted)">' +
+      'This server is the text/vision brain. Image generation and voice are handled by sibling servers. ' +
+      'Install and start them below.</div>';
+    keys.forEach((key) => {
+      const svc = services[key];
+      const label = SERVICE_LABELS[key] || { name: svc.service || key, icon: 'fa-cube' };
+      const available = svc.available;
+      const badge = available
+        ? '<span class="badge bg-success">running</span>'
+        : '<span class="badge bg-warning text-dark">not running</span>';
+      html +=
+        '<div class="wizard-svc">' +
+        '<div class="d-flex align-items-center justify-content-between">' +
+        '<span class="svc-name"><i class="fas ' + label.icon + ' me-1"></i>' + (label.name || svc.service) + '</span>' +
+        badge +
+        '</div>' +
+        '<div class="small mt-1" style="color:var(--text-muted)">' + (svc.url || '') + '</div>' +
+        (svc.install
+          ? '<code>' + escapeHtml(svc.install) +
+            ' <button class="svc-install-btn" data-copy="' + escapeHtml(svc.install) + '"><i class="fas fa-copy"></i></button></code>'
+          : '') +
+        '</div>';
+    });
+    body.innerHTML = html;
+    body.querySelectorAll('.svc-install-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(btn.dataset.copy);
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i>';
+        setTimeout(() => { btn.innerHTML = orig; }, 1200);
+      });
+    });
+  } catch (err) {
+    body.innerHTML = '<div class="small" style="color:var(--danger)">Failed to load services: ' + escapeHtml(err.message) + '</div>';
   }
 }
 
@@ -465,6 +563,15 @@ function init() {
   document.getElementById('pullBtn').addEventListener('click', pullModel);
   document.getElementById('pullInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); pullModel(); }
+  });
+  document.getElementById('setupWizardBtn').addEventListener('click', () => {
+    openSetupWizard();
+    const modalEl = document.getElementById('setupWizardModal');
+    if (window.bootstrap && bootstrap.Modal) {
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    } else {
+      modalEl.style.display = 'block';
+    }
   });
   els.stop.addEventListener('click', () => {
     if (abortController) abortController.abort();

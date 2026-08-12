@@ -140,6 +140,8 @@ curl -X POST http://localhost:8005/chat \
 | `MODELS_EXTRA_SCAN_DIRS` | *(empty)* | Semicolon-separated dirs scanned for GGUF/HF models outside `HF_HOME` |
 | `GGUF_N_GPU_LAYERS` | `-1` | GPU layers for llama-cpp GGUF backend (`-1` = all) |
 | `GGUF_N_CTX` | `4096` | Context window for llama-cpp GGUF backend |
+| `IMAGE_SERVER_URL` | `http://127.0.0.1:8765` | Open Fantasia (image generation) sibling URL |
+| `VOICE_SERVER_URL` | `http://127.0.0.1:8766` | Olly Voice (STT/TTS) sibling URL |
 
 **Example:**
 
@@ -667,6 +669,67 @@ docker run --gpus all -p 8766:8766 \
 ```
 
 The `/chat/multimodal` endpoint is the recommended backend for voice pipelines as it natively handles audio input.
+
+---
+
+## Sibling orchestration (image generation & voice)
+
+This server is the **text/vision brain** of a local inference stack. Image generation
+(Open Fantasia :8765) and voice (Olly Voice :8766) are handled by dedicated sibling
+servers. This server probes them, routes to them, and guides setup.
+
+### POST /generate — image generation (→ Open Fantasia)
+
+Routes an image-generation request to Open Fantasia. The JSON body is forwarded as-is.
+
+```bash
+curl -X POST http://localhost:8005/generate \
+  -H "Content-Type: application/json" \
+  -d '{"model":"black-forest-labs/FLUX.1-dev","prompt":"a red cat","width":512}'
+```
+
+If Open Fantasia isn't running, returns **503** with an install command:
+
+```json
+{ "detail": "Open Fantasia (http://127.0.0.1:8765) is not running.\nInstall it with:\n  git clone https://github.com/fabiopacifici-bot/open-fantasia-imagegen\nThen start it and retry." }
+```
+
+### POST /tts — text to speech (→ Olly Voice)
+
+Routes a TTS request to Olly Voice. The JSON body is forwarded as-is.
+
+```bash
+curl -X POST http://localhost:8005/tts \
+  -H "Content-Type: application/json" \
+  -d '{"model":"CosyVoice2","text":"hello world"}'
+```
+
+If Olly Voice isn't running, returns **503** with an install command.
+
+### GET /services — sibling status + install commands
+
+```bash
+curl http://localhost:8005/services
+```
+
+```json
+{
+  "imagegen": { "available": false, "url": "http://127.0.0.1:8765",
+                "service": "Open Fantasia",
+                "install": "git clone https://github.com/fabiopacifici-bot/open-fantasia-imagegen" },
+  "voice":    { "available": false, "url": "http://127.0.0.1:8766",
+                "service": "Olly Voice",
+                "install": "git clone https://github.com/fabiopacificicom/olly-voice-server" }
+}
+```
+
+The web UI shows a **Services** panel and a **Setup wizard** modal (with copy-to-clipboard
+install commands) so you can see which siblings are up and install the missing ones.
+
+> **Note:** if the siblings run inside WSL, they may not be reachable at `127.0.0.1`
+> from the Windows host. Point `IMAGE_SERVER_URL` / `VOICE_SERVER_URL` at the
+> WSL-reachable address or set up WSL port forwarding so the probe can reach them.
+
 
 ---
 

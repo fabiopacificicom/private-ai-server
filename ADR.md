@@ -149,6 +149,23 @@ The model scanner discovers models from all of these, so the classification prev
 presenting image/voice models as text-chat models. Availability of each sibling is
 probed via `/health` and exposed in `/api/tags` and `/models`.
 
+### Sibling orchestration (Level 2 & 3)
+
+This server acts as a **local-inference orchestrator** for the stack:
+
+- **Level 2 — routing.** `POST /generate` proxies image-generation requests to
+  Open Fantasia (:8765) and `POST /tts` proxies text-to-speech to Olly Voice (:8766).
+  Payloads are forwarded as-is (the server stays decoupled from sibling schemas).
+  When a sibling is unreachable, the endpoint returns **503 with an install command**
+  instead of failing silently, guiding the user to set it up.
+- **Level 3 — setup wizard.** `GET /services` returns each sibling's availability,
+  URL, and install command. The web UI shows a "Services" panel + a setup wizard
+  modal with copy-to-clipboard install commands.
+
+*Implicit alternative:* bundle image/voice inference into this server.
+*Chosen:* keep each modality in its own microservice and only route/probe from here —
+simpler, more resilient, and each service scales independently.
+
 ## Constraints
 
 - Target: RTX 4090 (16GB VRAM) with CUDA 12.x; 64GB+ system RAM for large-model offload.

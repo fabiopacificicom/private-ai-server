@@ -16,6 +16,7 @@ from routes.models import router as models_router
 from routes.jobs import router as jobs_router
 from routes.system import router as system_router
 from routes.ollama import router as ollama_router
+from routes.siblings import router as siblings_router
 
 # Absolute path to the static UI folder (next to this file)
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -68,6 +69,7 @@ app.include_router(models_router)
 app.include_router(jobs_router)
 app.include_router(system_router)
 app.include_router(ollama_router)
+app.include_router(siblings_router)
 
 
 @app.get("/", include_in_schema=False)
