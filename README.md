@@ -9,7 +9,7 @@ A high-performance, GPU-optimized FastAPI server for serving Hugging Face langua
 **Why use it:**
 
 - 🚀 **GPU-optimized**: Prefers vLLM backend, falls back to transformers with CUDA support
-- 💾 **Smart memory management**: Automatic 4-bit quantization for models >14GB, LRU cache with configurable limits
+- 💾 **Smart memory management**: Automatic 4-bit quantization for models >20GB, LRU cache with configurable limits
 - 🎯 **Explicit control**: Models must be explicitly pulled before use (no surprise downloads during inference)
 - 🔧 **Production-ready**: Background job system for non-blocking downloads, CUDA OOM prevention, MoE/custom model support
 - 📊 **Observable**: Comprehensive diagnostics endpoints (`/health`, `/status`, `/diag`, `/jobs`)
@@ -17,7 +17,7 @@ A high-performance, GPU-optimized FastAPI server for serving Hugging Face langua
 
 **Key Features:**
 
-- **Backends**: vLLM (preferred for max GPU performance) → Transformers pipeline fallback
+- **Backends**: vLLM (preferred for max GPU performance) → Transformers pipeline fallback → llama-cpp (GGUF)
 - **Auto-quantization**: 4-bit (q4/nf4) for models exceeding threshold using bitsandbytes
 - **Streaming responses**: Server-Sent Events (SSE) for real-time text generation
 - **Non-blocking downloads**: Background `/pull` jobs with status tracking
@@ -45,14 +45,14 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
-2. **Install dependencies:**
+1. **Install dependencies:**
 
 ```powershell
 pip install -U pip setuptools wheel
 pip install -r requirements.txt
 ```
 
-3. **Enable CUDA (Windows):**
+1. **Enable CUDA (Windows):**
    - If you have an NVIDIA GPU but PyTorch shows CPU-only, run:
 
    ```powershell .\setup_cuda_pytorch.ps1
@@ -60,7 +60,7 @@ pip install -r requirements.txt
 
    - This installs CUDA-enabled PyTorch (CUDA 12.6) and bitsandbytes for quantization
 
-4. **Start the server:**
+2. **Start the server:**
 
 ```powershell
 python -m uvicorn app:app --host 0.0.0.0 --port 8005
@@ -75,6 +75,7 @@ bash scripts/start-wsl-server.sh
 ```
 
 The script:
+
 - Creates a dedicated `.venv-wsl` virtual environment if missing
 - Installs requirements
 - Exports env vars from `.env`
@@ -107,7 +108,7 @@ curl http://localhost:8005/diag
 # Should show: cuda_available: true, device: RTX 4090...
 ```
 
-2. **Pull a model:**
+1. **Pull a model:**
 
 ```bash
 curl -X POST http://localhost:8005/pull \
@@ -115,7 +116,7 @@ curl -X POST http://localhost:8005/pull \
   -d '{"model":"gpt2","quantize":"auto","init":true}'
 ```
 
-3. **Chat with the model:**
+1. **Chat with the model:**
 
 ```bash
 curl -X POST http://localhost:8005/chat \
@@ -128,18 +129,25 @@ curl -X POST http://localhost:8005/chat \
 ### Environment Variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | `MAX_CACHE_MODELS` | `2` | Maximum models kept in memory (LRU eviction) |
 | `MODEL_LOAD_COOLDOWN` | `300` | Cooldown seconds after failed load before retry |
-| `MODEL_Q4_THRESHOLD_BYTES` | `~14e9` | Size threshold (bytes) for auto q4 quantization |
+| `MODEL_Q4_THRESHOLD_BYTES` | `~20e9` | Size threshold (bytes) for auto q4 quantization |
 | `MAX_CONCURRENT_PULLS` | `2` | Max simultaneous background downloads |
 | `PYTORCH_ALLOC_CONF` | `expandable_segments:True` | Auto-set to reduce CUDA fragmentation |
+| `MAX_GPU_MEMORY` | `12GiB` | GPU memory cap for layer-splitting (leaves safety buffer) |
+| `MAX_CPU_MEMORY` | `48GiB` | CPU/RAM pool for offloading layers beyond GPU cap |
+| `MODELS_EXTRA_SCAN_DIRS` | *(empty)* | Semicolon-separated dirs scanned for GGUF/HF models outside `HF_HOME` |
+| `GGUF_N_GPU_LAYERS` | `-1` | GPU layers for llama-cpp GGUF backend (`-1` = all) |
+| `GGUF_N_CTX` | `4096` | Context window for llama-cpp GGUF backend |
 
 **Example:**
 
 ```powershell
 $env:MAX_CACHE_MODELS = "1"
-$env:MODEL_Q4_THRESHOLD_BYTES = "30000000000"  # 30GB threshold
+$env:MODEL_Q4_THRESHOLD_BYTES = "20000000000"  # 20GB threshold
+$env:MAX_GPU_MEMORY = "12GiB"   # leave 4GB buffer on a 16GB GPU
+$env:MAX_CPU_MEMORY = "32GiB"   # offload overflow layers to system RAM
 python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ```
 
@@ -148,7 +156,7 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 1. **Explicit downloads only**: Models must be pulled via `/pull` before use. `/chat` will never auto-download.
 2. **Local-only loading**: Once pulled, models load from local HF cache (`~/.cache/huggingface/hub`)
 3. **GPU-first**: Automatically uses GPU when available, CPU fallback otherwise
-4. **Smart quantization**: Models >14GB auto-use 4-bit when `bitsandbytes` available
+4. **Smart quantization**: Models >20GB auto-use 4-bit when `bitsandbytes` available
 5. **LRU caching**: Keeps `MAX_CACHE_MODELS` in memory, evicts oldest when limit exceeded
 6. **Failed-load protection**: 300s cooldown after failed loads prevents retry storms
 
@@ -170,7 +178,7 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 
 **Quantization options:**
 
-- `auto`: Server decides (q4 if model >14GB, otherwise fp16)
+- `auto`: Server decides (q4 if model >20GB, otherwise fp16)
 - `q4`: Force 4-bit quantization (requires bitsandbytes + CUDA)
 - `fp16`/`no`: Full precision (no quantization)
 
@@ -281,9 +289,11 @@ data: {"delta": {}, "done": true}
 Designed for [NVIDIA Nemotron 3 Nano Omni](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16) and any HuggingFace multimodal model with `trust_remote_code` support. Falls back to text-only inference when no media is supplied.
 
 **Supported models:**
+
 | Model | Modalities | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16` | text, image, audio, video | 30B MoE, 3B active — RTX 4090 + 64GB RAM |
+| `meta-models/Muse-Glimmer-30B` | text, image | Use `/pull` + `/chat/multimodal` with HF-style content blocks |
 | `Qwen/Qwen3-Omni` | text, image, audio | MoE, trust_remote_code |
 | Any HF vision-language model | text, image | AutoProcessor compatible |
 
@@ -306,10 +316,28 @@ Designed for [NVIDIA Nemotron 3 Nano Omni](https://huggingface.co/nvidia/Nemotro
 }
 ```
 
+**Muse-compatible request format (Hugging Face style):**
+
+```json
+{
+  "model": "meta-models/Muse-Glimmer-30B",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "image", "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/p-blog/candy.JPG"},
+        {"type": "text", "text": "What animal is on the candy?"}
+      ]
+    }
+  ],
+  "max_tokens": 128
+}
+```
+
 **Media fields (all optional, all per-message):**
 
 | Field | Type | Format | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `images` | `string[]` | base64 or `https://` URL | Multiple images supported |
 | `audio` | `string` | base64 WAV/MP3/FLAC | Single audio clip per message |
 | `video` | `string` | base64 MP4 or `https://` URL | Single video per message |
@@ -354,8 +382,9 @@ curl -N -X POST http://localhost:8005/chat/multimodal \
 ```
 
 **Memory behaviour:**
+
 - Uses `device_map="auto"` — VRAM fills first, overflow to system RAM
-- Auto 4-bit quantization (NF4 via bitsandbytes) for models >14GB
+- Auto 4-bit quantization (NF4 via bitsandbytes) for models >20GB
 - Nemotron 30B BF16 (~60GB): fits on RTX 4090 16GB + 64GB DDR5 with quant
 - Text-only messages route to the existing `/chat` path transparently
 
@@ -524,7 +553,7 @@ Returns server health status, uptime, cache statistics, and GPU metrics.
 ### Common Issues
 
 | Issue | Solution |
-|-------|----------|
+| ------- | ---------- |
 | **"Model not available locally"** | Call `/pull` first to download the model |
 | **CUDA OOM errors** | 1. Reduce `MAX_CACHE_MODELS` to `1`<br>2. Use q4 quantization<br>3. Restart server to clear GPU<br>4. Check `nvidia-smi` for other GPU processes |
 | **"requires accelerate" error** | `pip install accelerate` |
@@ -612,7 +641,7 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 
 ```powershell
 $env:MAX_CACHE_MODELS = "5"           # Keep 5 models cached
-$env:MODEL_Q4_THRESHOLD_BYTES = "30000000000"  # Only q4 for >30GB
+$env:MODEL_Q4_THRESHOLD_BYTES = "20000000000"  # Only q4 for >20GB
 python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ```
 
@@ -692,15 +721,15 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ## Comparison: This Server vs Ollama
 
 | Feature | This Server | Ollama |
-|---------|-------------|--------|
+| --------- | ------------- | -------- |
 | **Backend** | vLLM (Linux)  transformers (Windows) | llama.cpp |
 | **GPU optimization** | Native CUDA + quantization | Metal/CUDA via llama.cpp |
 | **Model format** | Native HF (safetensors) | GGUF conversion required |
 | **Auto-download** | Explicit `/pull` only | Auto-downloads on first use |
 | **Quantization** | Auto 4-bit for large models | GGUF quant levels |
-| **MoE support** |  (trust_remote_code) | Limited |
-| **Job tracking** |  Background jobs + status |  |
-| **Multi-model cache** |  Configurable LRU |  |
+| **MoE support** | (trust_remote_code) | Limited |
+| **Job tracking** | Background jobs + status | |
+| **Multi-model cache** | Configurable LRU | |
 | **API format** | Ollama-compatible | Native Ollama |
 | **Performance (Windows)** | 🐌 20-40 tok/s (transformers) | 🚀 60-120 tok/s (llama.cpp) |
 | **Performance (Linux)** | 🚀 60-120 tok/s (vLLM) | 🚀 60-120 tok/s (llama.cpp) |
