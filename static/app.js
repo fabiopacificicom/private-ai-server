@@ -105,9 +105,9 @@ async function refreshModels() {
         const opt = document.createElement('option');
         opt.value = m.model;
         opt.text = m.name;
-        // Only chat/vision models are usable for chat on this server
-        const usable = mod === 'chat' || mod === 'vision';
-        if (!usable) opt.disabled = true;
+        // All modalities are selectable — the active mode (Chat/Image/Audio)
+        // determines how the selected model is used. Image/voice models route
+        // to the sibling servers in Image/Audio mode.
         og.appendChild(opt);
       });
       els.model.appendChild(og);
@@ -534,11 +534,12 @@ async function generateImage() {
   els.submit.disabled = true;
   addMessage('user', prompt);
   els.message.value = '';
+  const selectedModel = els.model.value;
   try {
     const res = await fetch('/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt, count: 1 }),
+      body: JSON.stringify({ prompt: prompt, count: 1, model: selectedModel || null }),
     });
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
@@ -566,11 +567,12 @@ async function generateAudio() {
   els.submit.disabled = true;
   addMessage('user', text);
   els.message.value = '';
+  const selectedModel = els.model.value;
   try {
     const res = await fetch('/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text }),
+      body: JSON.stringify({ text: text, model: selectedModel || null }),
     });
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
