@@ -6,6 +6,7 @@
 let conversation = [];
 let abortController = null;
 let genStartTime = null;
+let currentMode = 'chat'; // 'chat' | 'image' | 'audio'
 
 const els = {
   model: document.getElementById('model'),
@@ -481,6 +482,137 @@ function addCopyButton(wrap, text) {
 }
 
 // ------------------------------------------------------------------
+// Media generation (image / audio) — Level 2 sibling routing
+// ------------------------------------------------------------------
+function setGenStatus(msg, isError) {
+  const el = document.getElementById('generationStatus');
+  if (!el) return;
+  if (!msg) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.textContent = msg;
+  el.className = 'gen-status' + (isError ? ' error' : '');
+}
+
+function addMediaMessage(kind, blob, url, meta) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg assistant';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+
+  if (kind === 'image') {
+    const img = document.createElement('img');
+    img.className = 'gen-img';
+    img.src = url;
+    img.alt = 'Generated image';
+    bubble.appendChild(img);
+  } else if (kind === 'audio') {
+    const audio = document.createElement('audio');
+    audio.className = 'gen-audio';
+    audio.controls = true;
+    audio.src = url;
+    bubble.appendChild(audio);
+  }
+
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'gen-meta';
+    m.textContent = meta;
+    bubble.appendChild(m);
+  }
+
+  wrap.appendChild(bubble);
+  els.messages.appendChild(wrap);
+  scrollToBottom();
+}
+
+async function generateImage() {
+  const prompt = els.message.value.trim();
+  if (!prompt) { setGenStatus('Enter a prompt for image generation.', true); return; }
+
+  setGenStatus('🖼️ Generating image via Open Fantasia…');
+  els.submit.disabled = true;
+  addMessage('user', prompt);
+  els.message.value = '';
+  try {
+    const res = await fetch('/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: prompt, count: 1 }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Generation failed (HTTP ' + res.status + ')');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const saved = res.headers.get('X-Saved-Paths') || '';
+    addMediaMessage('image', blob, url, saved ? 'Saved: ' + saved : '');
+    setGenStatus('✅ Image generated.');
+  } catch (err) {
+    console.error(err);
+    setGenStatus('❌ ' + err.message, true);
+    addMessage('assistant', 'Error: ' + err.message);
+  } finally {
+    els.submit.disabled = false;
+  }
+}
+
+async function generateAudio() {
+  const text = els.message.value.trim();
+  if (!text) { setGenStatus('Enter text to synthesize speech.', true); return; }
+
+  setGenStatus('🔊 Synthesizing speech via Olly Voice…');
+  els.submit.disabled = true;
+  addMessage('user', text);
+  els.message.value = '';
+  try {
+    const res = await fetch('/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'TTS failed (HTTP ' + res.status + ')');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    addMediaMessage('audio', blob, url, '');
+    setGenStatus('✅ Audio generated.');
+  } catch (err) {
+    console.error(err);
+    setGenStatus('❌ ' + err.message, true);
+    addMessage('assistant', 'Error: ' + err.message);
+  } finally {
+    els.submit.disabled = false;
+  }
+}
+
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-tab').forEach((tab) => {
+    tab.classList.toggle('active', tab.dataset.mode === mode);
+  });
+  const hint = document.getElementById('inputHint');
+  const submit = els.submit;
+  if (mode === 'image') {
+    els.message.placeholder = 'Describe the image to generate… (Enter to generate)';
+    submit.innerHTML = '<i class="fas fa-image"></i>';
+    hint.textContent = 'Generates an image via Open Fantasia (:8765).';
+  } else if (mode === 'audio') {
+    els.message.placeholder = 'Type text to speak… (Enter to synthesize)';
+    submit.innerHTML = '<i class="fas fa-volume-up"></i>';
+    hint.textContent = 'Synthesizes speech via Olly Voice (:8766).';
+  } else {
+    els.message.placeholder = 'Type your message here… (Enter to send, Shift+Enter for newline)';
+    submit.innerHTML = '<i class="fas fa-paper-plane"></i>';
+    hint.textContent = 'Responses stream in real time. Reasoning models show their thinking.';
+  }
+  setGenStatus('');
+}
+
+// ------------------------------------------------------------------
 // Pull model
 // ------------------------------------------------------------------
 async function pullModel() {
@@ -542,14 +674,24 @@ async function pullModel() {
 // ------------------------------------------------------------------
 // Event wiring
 // ------------------------------------------------------------------
+function handleSubmit() {
+  if (currentMode === 'image') { generateImage(); return; }
+  if (currentMode === 'audio') { generateAudio(); return; }
+  sendChat();
+}
+
 function init() {
-  els.submit.addEventListener('click', sendChat);
+  els.submit.addEventListener('click', handleSubmit);
 
   els.message.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendChat();
+      handleSubmit();
     }
+  });
+
+  document.querySelectorAll('.mode-tab').forEach((tab) => {
+    tab.addEventListener('click', () => setMode(tab.dataset.mode));
   });
 
   document.getElementById('refreshModels').addEventListener('click', refreshModels);

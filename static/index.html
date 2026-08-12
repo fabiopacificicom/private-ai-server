@@ -202,6 +202,49 @@
     .input-row textarea:focus { outline: none; border-color: var(--accent); }
     .input-row button { border-radius: 0.75rem; padding: 0 1.25rem; font-size: 1rem; }
     .input-hint { text-align: center; font-size: 0.7rem; color: var(--text-muted); margin-top: 0.5rem; }
+    /* Mode tabs */
+    .mode-tabs {
+      display: flex;
+      gap: 0.35rem;
+      max-width: 900px;
+      margin: 0 auto 0.5rem;
+    }
+    .mode-tab {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 0.6rem;
+      padding: 0.3rem 0.8rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    .mode-tab:hover { color: var(--text); border-color: var(--text-muted); }
+    .mode-tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .gen-status {
+      max-width: 900px;
+      margin: 0.5rem auto 0;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    .gen-status.error { color: var(--danger); }
+    /* Generated media in messages */
+    .msg .bubble img.gen-img {
+      max-width: 100%;
+      border-radius: 0.5rem;
+      display: block;
+    }
+    .msg .bubble audio.gen-audio { width: 100%; margin-top: 0.25rem; }
+    .msg .bubble .gen-meta {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      margin-top: 0.35rem;
+      word-break: break-all;
+    }
     @media (max-width: 768px) { .sidebar { display: none; } .msg { max-width: 90%; } }
   </style>
 </head>
@@ -298,18 +341,24 @@
     <div id="messages" class="messages"></div>
 
     <div class="input-area">
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="chat"><i class="fas fa-comments me-1"></i>Chat</button>
+        <button class="mode-tab" data-mode="image"><i class="fas fa-image me-1"></i>Image</button>
+        <button class="mode-tab" data-mode="audio"><i class="fas fa-volume-up me-1"></i>Audio</button>
+      </div>
       <div class="input-row">
         <textarea id="message" placeholder="Type your message here… (Enter to send, Shift+Enter for newline)"></textarea>
         <button id="submit" class="btn btn-primary"><i class="fas fa-paper-plane"></i></button>
       </div>
-      <div class="input-hint">Responses stream in real time. Reasoning models show their thinking.</div>
+      <div id="generationStatus" class="gen-status" style="display:none;"></div>
+      <div class="input-hint" id="inputHint">Responses stream in real time. Reasoning models show their thinking.</div>
     </div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
     integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
     crossorigin="anonymous"></script>
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>
 
 </html>
