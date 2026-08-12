@@ -95,6 +95,8 @@ class TestJobsEndpoint:
             pytest.fail("Expected 404 for unknown job_id")
         except urllib.error.HTTPError as e:
             assert e.code == 404
+        except urllib.error.URLError:
+            pytest.skip(f"Server not running at {BASE_URL}")
 
 
 class TestChatValidation:
