@@ -11,55 +11,114 @@ from siblings import (
     SIBLING_INSTALL,
     SiblingUnavailable,
     get_sibling_config,
-    proxy_json,
+    proxy_binary,
+    proxy_multipart,
     sibling_unavailable_detail,
 )
 
 
-class TestProxyJson:
-    def test_success_returns_parsed_json(self):
-        resp = mock.Mock()
-        resp.read.return_value = json.dumps({"images": ["data:image/png;base64,abc"]}).encode()
-        resp.__enter__ = mock.Mock(return_value=resp)
-        resp.__exit__ = mock.Mock(return_value=False)
+class _FakeResponse:
+    def __init__(self, status, body, headers):
+        self.status = status
+        self._body = body
+        self._headers = headers
 
-        with mock.patch("urllib.request.urlopen", return_value=resp) as m:
-            result = proxy_json("http://127.0.0.1:8765/generate", {"prompt": "hi"})
+    def read(self):
+        return self._body
 
-        assert result == {"images": ["data:image/png;base64,abc"]}
-        # Verify the request was built correctly
-        req = m.call_args[0][0]
-        assert req.full_url == "http://127.0.0.1:8765/generate"
-        assert req.get_method() == "POST"
-        assert req.get_header("Content-type") == "application/json"
+    def getheaders(self):
+        return list(self._headers.items())
 
-    def test_empty_response_returns_empty_dict(self):
-        resp = mock.Mock()
-        resp.read.return_value = b""
-        resp.__enter__ = mock.Mock(return_value=resp)
-        resp.__exit__ = mock.Mock(return_value=False)
 
-        with mock.patch("urllib.request.urlopen", return_value=resp):
-            assert proxy_json("http://x/generate", {}) == {}
+class _FakeConn:
+    def __init__(self, response):
+        self._response = response
+        self.closed = False
+        self.sock = mock.Mock()
+        self.request_args = None
+
+    def request(self, method, path, body=None, headers=None):
+        self.request_args = (method, path, body, headers)
+
+    def getresponse(self):
+        return self._response
+
+    def close(self):
+        self.closed = True
+
+
+def _patch_conn(response):
+    """Patch http.client.HTTPConnection to return a fake conn with the given response."""
+    conn = _FakeConn(response)
+    patcher = mock.patch(
+        "siblings.http.client.HTTPConnection",
+        return_value=conn,
+    )
+    return patcher, conn
+
+
+class TestProxyBinary:
+    def test_success_returns_raw_bytes_and_headers(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"fakepngdata"
+        resp = _FakeResponse(200, png, {"Content-Type": "image/png", "X-Saved-Paths": "/tmp/a.png"})
+        patcher, conn = _patch_conn(resp)
+        with patcher:
+            body, headers = proxy_binary("http://127.0.0.1:8765/generate", {"prompt": "hi"})
+
+        assert body == png
+        assert headers["content-type"] == "image/png"
+        assert headers["x-saved-paths"] == "/tmp/a.png"
+        method, path, req_body, req_headers = conn.request_args
+        assert method == "POST"
+        assert path == "/generate"
+        assert req_headers["Content-Type"] == "application/json"
+        assert json.loads(req_body) == {"prompt": "hi"}
+        assert conn.closed is True
 
     def test_connection_error_raises_sibling_unavailable(self):
         with mock.patch(
-            "urllib.request.urlopen",
+            "siblings.http.client.HTTPConnection",
             side_effect=ConnectionRefusedError("refused"),
         ):
             with pytest.raises(SiblingUnavailable):
-                proxy_json("http://127.0.0.1:8765/generate", {})
+                proxy_binary("http://127.0.0.1:8765/generate", {})
 
-    def test_http_error_raises_sibling_unavailable_with_detail(self):
-        import urllib.error
-        http_err = urllib.error.HTTPError(
-            "http://x/generate", 500, "Internal Server Error", {}, None
-        )
-        http_err.read = lambda: json.dumps({"detail": "boom"}).encode()
-        with mock.patch("urllib.request.urlopen", side_effect=http_err):
+    def test_non_2xx_raises_sibling_unavailable_with_detail(self):
+        resp = _FakeResponse(503, json.dumps({"detail": "generation in progress"}).encode(),
+                             {"Content-Type": "application/json"})
+        patcher, _ = _patch_conn(resp)
+        with patcher:
             with pytest.raises(SiblingUnavailable) as exc:
-                proxy_json("http://x/generate", {})
-        assert "500" in str(exc.value)
+                proxy_binary("http://x/generate", {})
+        assert "503" in str(exc.value)
+        assert "generation in progress" in str(exc.value)
+
+
+class TestProxyMultipart:
+    def test_sends_text_field_and_returns_wav(self):
+        wav = b"RIFF....WAVE"
+        resp = _FakeResponse(200, wav, {"Content-Type": "audio/wav"})
+        patcher, conn = _patch_conn(resp)
+        with patcher:
+            body, headers = proxy_multipart("http://127.0.0.1:8766/tts", {"text": "hello"})
+
+        assert body == wav
+        assert headers["content-type"] == "audio/wav"
+        method, path, req_body, req_headers = conn.request_args
+        assert method == "POST"
+        assert path == "/tts"
+        ctype = req_headers["Content-Type"]
+        assert ctype.startswith("multipart/form-data; boundary=")
+        assert b'name="text"' in req_body
+        assert b"hello" in req_body
+
+    def test_connection_error_raises_sibling_unavailable(self):
+        with mock.patch(
+            "siblings.http.client.HTTPConnection",
+            side_effect=ConnectionRefusedError("refused"),
+        ):
+            with pytest.raises(SiblingUnavailable):
+                proxy_multipart("http://127.0.0.1:8766/tts", {"text": "hi"})
 
 
 class TestSiblingConfig:

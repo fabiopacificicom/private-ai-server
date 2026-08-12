@@ -55,18 +55,28 @@ class TestServices:
 
 
 class TestGenerate:
-    def test_generate_returns_503_when_sibling_down(self):
-        # Open Fantasia is not expected to be running in CI
-        status, body = _post("/generate", {"model": "FLUX.1", "prompt": "a cat"})
-        assert status == 503
-        data = json.loads(body)
-        assert "Open Fantasia" in data["detail"]
+    def test_generate_routes_to_fantasia(self):
+        # If Fantasia is up, expect raw image bytes (200). If down, expect 503 + install prompt.
+        services = json.loads(_get("/services").read())
+        available = services.get("imagegen", {}).get("available")
+        status, body = _post("/generate", {"prompt": "a cat astronaut", "count": 1})
+        if available:
+            assert status == 200
+            assert body[:4] in (b"\x89PNG", b"\xff\xd8\xff")  # PNG or JPEG magic
+        else:
+            assert status == 503
+            assert "Open Fantasia" in json.loads(body)["detail"]
 
 
 class TestTTS:
-    def test_tts_returns_503_when_sibling_down(self):
-        # Olly Voice is not expected to be running in CI
-        status, body = _post("/tts", {"model": "CosyVoice2", "text": "hello"})
-        assert status == 503
-        data = json.loads(body)
-        assert "Olly Voice" in data["detail"]
+    def test_tts_routes_to_olly_voice(self):
+        # If Olly Voice is up, expect wav bytes (200). If down, expect 503 + install prompt.
+        services = json.loads(_get("/services").read())
+        available = services.get("voice", {}).get("available")
+        status, body = _post("/tts", {"text": "hello"})
+        if available:
+            assert status == 200
+            assert body[:4] == b"RIFF"  # WAV magic
+        else:
+            assert status == 503
+            assert "Olly Voice" in json.loads(body)["detail"]

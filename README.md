@@ -680,12 +680,14 @@ servers. This server probes them, routes to them, and guides setup.
 
 ### POST /generate — image generation (→ Open Fantasia)
 
-Routes an image-generation request to Open Fantasia. The JSON body is forwarded as-is.
+Routes an image-generation request to Open Fantasia. The JSON body is forwarded
+as-is, and the **raw image bytes** (e.g. `image/png`) are returned with the
+`X-Saved-Paths` header pointing to where the sibling saved the file.
 
 ```bash
 curl -X POST http://localhost:8005/generate \
   -H "Content-Type: application/json" \
-  -d '{"model":"black-forest-labs/FLUX.1-dev","prompt":"a red cat","width":512}'
+  -d '{"prompt":"a red cat","model":"stabilityai/sd-turbo","quality":"standard","count":1}'
 ```
 
 If Open Fantasia isn't running, returns **503** with an install command:
@@ -696,7 +698,8 @@ If Open Fantasia isn't running, returns **503** with an install command:
 
 ### POST /tts — text to speech (→ Olly Voice)
 
-Routes a TTS request to Olly Voice. The JSON body is forwarded as-is.
+Routes a TTS request to Olly Voice. The JSON body's `text` field is sent to the
+sibling as `multipart/form-data`, and the **wav audio bytes** are returned.
 
 ```bash
 curl -X POST http://localhost:8005/tts \
@@ -705,6 +708,10 @@ curl -X POST http://localhost:8005/tts \
 ```
 
 If Olly Voice isn't running, returns **503** with an install command.
+
+> **Note:** both `/generate` and `/tts` return **raw binary bytes** (image/audio),
+> not JSON. When a sibling is unreachable the proxy fails fast with a 503 and the
+> install command instead of hanging.
 
 ### GET /services — sibling status + install commands
 
