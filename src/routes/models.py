@@ -55,6 +55,82 @@ def _resolve_snapshot_path(cache_root: str) -> Optional[str]:
     return cache_root
 
 
+def _discover_ollama_models() -> List[Dict[str, Any]]:
+    """Discover models from an existing Ollama install.
+
+    Ollama stores models as Docker-registry-style manifests under
+    `<store>/manifests/<registry>/<namespace>/<model>/<tag>`, with the actual
+    GGUF weights as `sha256-...` blobs under `<store>/blobs/`.
+
+    Returns a list of model entries suitable for /models and /api/tags.
+    """
+    store = config.OLLAMA_MODELS_DIR
+    if not store or not os.path.isdir(store):
+        return []
+
+    manifests_dir = os.path.join(store, "manifests")
+    blobs_dir = os.path.join(store, "blobs")
+    if not os.path.isdir(manifests_dir):
+        return []
+
+    import json as _json
+
+    found: List[Dict[str, Any]] = []
+    # Walk <store>/manifests/<registry>/<namespace>/<model>/<tag>
+    for root, dirs, files in os.walk(manifests_dir):
+        for fname in files:
+            manifest_path = os.path.join(root, fname)
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = _json.load(f)
+            except Exception:
+                continue
+
+            # Build model name from the manifest path relative to manifests/
+            rel = os.path.relpath(manifest_path, manifests_dir)
+            parts = rel.replace("\\", "/").split("/")
+            # parts = [registry, namespace, model, tag]
+            if len(parts) < 3:
+                continue
+            model_name_parts = parts[:3]
+            # Skip the "library" namespace in the display name (Ollama shows gemma2, not registry/library/gemma2)
+            if len(parts) == 4:
+                registry, namespace, model, tag = parts
+                if namespace in ("library", "hf.co"):
+                    name = f"{model}:{tag}"
+                else:
+                    name = f"{namespace}/{model}:{tag}"
+            else:
+                name = "/".join(model_name_parts)
+
+            # Find the model layer (GGUF blob)
+            model_layer = None
+            for layer in (manifest.get("layers") or []):
+                if layer.get("mediaType") == "application/vnd.ollama.image.model":
+                    model_layer = layer
+                    break
+            if model_layer is None:
+                continue
+
+            digest = model_layer.get("digest", "")  # e.g. sha256:abc...
+            blob_name = digest.replace(":", "-")    # e.g. sha256-abc...
+            blob_path = os.path.join(blobs_dir, blob_name)
+            if not os.path.isfile(blob_path):
+                continue
+
+            size = model_layer.get("size") or 0
+            found.append({
+                "model": name,
+                "description": f"Ollama model (GGUF)",
+                "loaded": False,
+                "backend": "gguf_llama_cpp",
+                "size_bytes": size,
+                "local_path": blob_path,
+                "load_duration": None,
+            })
+    return found
+
+
 @router.get(
     "/models",
     summary="List available models",
@@ -133,6 +209,24 @@ async def list_models():
                     seen_guuf.add(gguf_path)
     except Exception:
         config.log.exception("Error scanning local model cache")
+
+    # Discover models from an existing Ollama install and register them
+    # so the Ollama-compatible endpoints (/api/chat, /api/tags) can serve them.
+    try:
+        ollama_models = _discover_ollama_models()
+        for m in ollama_models:
+            name = m["model"]
+            if name in state.model_meta:
+                continue
+            state.model_meta[name] = {
+                **m,
+                "backend": "gguf_llama_cpp",
+                "local_path": m["local_path"],
+                "size_bytes": m.get("size_bytes"),
+            }
+            models.append(m)
+    except Exception:
+        config.log.exception("Error discovering Ollama models")
 
     save_manifest()
     return {"models": models}

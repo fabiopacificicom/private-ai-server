@@ -3,6 +3,7 @@ import os
 import logging
 import time
 import asyncio
+from typing import Optional
 
 # Must be set before torch is imported
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
@@ -110,6 +111,9 @@ MODELS_EXTRA_SCAN_DIRS: list = [
     d.strip() for d in os.getenv("MODELS_EXTRA_SCAN_DIRS", "").split(";")
     if d.strip() and os.path.isdir(d.strip())
 ]
+# Root of an existing Ollama install's model store (manifests + sha256 blobs).
+# When set, the server discovers Ollama models and can serve them as GGUF.
+OLLAMA_MODELS_DIR: Optional[str] = os.getenv("OLLAMA_MODELS_DIR") or None
 
 server_start_time: float = time.time()
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PULLS)
