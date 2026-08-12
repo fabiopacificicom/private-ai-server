@@ -129,6 +129,39 @@ This directory contains all project specifications, plans, reviews, and document
 
 ---
 
+#### [plans/muse-glimmer-support-plan.md](plans/muse-glimmer-support-plan.md)
+
+**Purpose**: Minimal-scope plan to support Muse Glimmer using the existing Transformers + HF snapshot workflow (no GGUF backend additions)  
+**Status**: 🔄 Proposed  
+**Contents**:
+
+- Current app.py audit of pull/load/multimodal paths
+- Decision to use `meta-models/Muse-Glimmer-30B` under current architecture
+- Minimal implementation steps for multimodal class alignment
+- Local snapshot source-of-truth guidance (`model_meta.local_path`)
+- Explicit GGUF non-support handling in current server path
+- Smoke test plan for `/pull` and `/chat/multimodal`
+
+**When to read**: Adding Muse support while preserving current architecture and avoiding extra backend scope
+
+---
+
+#### [plans/gguf-support-plan.md](plans/gguf-support-plan.md)
+
+**Purpose**: Phased plan to add GGUF text-inference support as an additional backend while preserving current Transformers/vLLM architecture and API contracts  
+**Status**: 🔄 Draft  
+**Contents**:
+
+- Backend extension design (`gguf_llama_cpp`)
+- Pull/chat routing strategy for `.gguf` and `hf://.../*.gguf`
+- No-break API compatibility approach
+- Environment and runtime controls for low-resource GPUs
+- Phased rollout, acceptance criteria, and risk mitigation
+
+**When to read**: Planning low-resource GGUF enablement without replacing existing model paths
+
+---
+
 ## Document Relationships
 
 ```
