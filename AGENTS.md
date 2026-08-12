@@ -216,6 +216,20 @@ from ADR components and dependencies. Then check whether `mmdc` is available
   - `docs:` documentation
   - `refactor:` refactoring without new features
 
+### Coding conventions
+
+Don't introduce new coding conventions. Follow the existing style in the codebase. Ensure code is well organized and implemented with proper error handling, logging, and comments where necessary. Use type hints and docstrings for all functions and classes.
+Keep code modular and reusable, and avoid hardcoding values. Use configuration files or environment variables for settings that may change between environments.
+Follow design patterns and best practices relevant to the chosen stack. Ensure that code is readable, maintainable, and adheres to the principles of clean code.
+
+### Testing
+
+For each feature and integration you implement
+
+- Write unit tests for each new function or class
+- Write integration tests for each new endpoint or component interaction
+- Run all tests before committing and ensure they pass
+
 ### ADR updates
 
 After each completed feature, check whether ADR needs updates:
