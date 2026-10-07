@@ -16,6 +16,9 @@ testable.
 
 ```mermaid
 graph TD
+  Desktop["🖥️ Tauri Desktop App\n8-screen setup wizard\n+ NSIS installer"]
+  WebUI["🌐 Web UI (static/)\nChat / Image / Audio"]
+
   Client["🧑 Client\nHTTP / JSON, Ollama-compatible"]
   App["🚀 FastAPI app.py\nentry point + exception handler"]
 
@@ -23,6 +26,8 @@ graph TD
   Models["📦 /models + /pull"]
   Jobs["📋 /jobs"]
   System["🩺 /health /status /diag"]
+  Ollama["🔌 /ollama\nOllama-compatible routes"]
+  Siblings["🔄 /generate + /tts\nsibling orchestration"]
 
   Loader["⚙️ loader.py\nload_model() dispatcher"]
   Cache["🧠 model_cache.py\nLRU + cooldown"]
@@ -37,11 +42,19 @@ graph TD
   TF["Transformers\n+ bitsandbytes"]
   LLAMA["llama.cpp\n(GGUF)"]
 
+  Fantasia["🎨 Open Fantasia :8765\nimage generation"]
+  Voice["🗣️ Olly Voice :8766\nTTS / voice"]
+
+  Desktop --> WebUI
+  Desktop --> App
+  WebUI --> App
   Client --> App
   App --> Chat
   App --> Models
   App --> Jobs
   App --> System
+  App --> Ollama
+  App --> Siblings
 
   Chat --> Loader
   Chat --> MM
@@ -58,6 +71,8 @@ graph TD
   Jobs --> DB
   System --> DB
   System --> State
+  Siblings --> Fantasia
+  Siblings --> Voice
 ```
 
 ## Context
@@ -77,12 +92,19 @@ The server must:
 
 ## Chosen platforms
 
-- **Frontend:** None — HTTP/JSON API only (FastAPI auto-generated OpenAPI docs at `/docs`).
+- **Frontend:** Web UI served by the server (`static/` — Chat / Image / Audio) plus a
+  Tauri v2 desktop app (`desktop/`) that doubles as an NSIS installer with a guided
+  setup wizard. FastAPI auto-generated OpenAPI docs at `/docs`.
 - **Backend:** Python 3.10+, FastAPI, uvicorn.
 - **Database:** SQLite (via `src/database.py`, a `JobDatabase` class) for persistent
   pull-job state (`jobs.db`).
+- **Desktop/Installer:** Tauri v2 (Rust + WebView2) + NSIS, packaging a stripped
+  PyInstaller server bootstrap (`server.spec`, ~30 MB).
+- **Sibling services:** Open Fantasia (image gen, :8765) and Olly Voice (TTS, :8766)
+  orchestrated from this server.
 - **Deploy:** Local / self-hosted; `docker-compose.yml` and `Dockerfile` provided;
-  WSL startup script (`scripts/start-wsl-server.sh`).
+  WSL startup script (`scripts/start-wsl-server.sh`); single-command release packaging
+  (`scripts/package-release.ps1` / `.sh`).
 
 ## Main components
 
@@ -98,8 +120,18 @@ The server must:
 - **`src/gguf.py`** — GGUF backend via llama-cpp-python + prompt building.
 - **`src/multimodal.py`** — multimodal model loading, media decoding, inference, streaming.
 - **`src/database.py`** — SQLite-backed job storage.
-- **`src/routes/`** — FastAPI routers: `chat`, `models`, `jobs`, `system`.
+- **`src/routes/`** — FastAPI routers: `chat`, `models`, `jobs`, `system`, `ollama`,
+  `siblings`.
 - **`src/utils.py`** — `with_timeout()` helper and GPU cleanup.
+- **`src/classify.py`** — model modality classification (chat / vision / imagegen /
+  voice / embeddings).
+- **`src/siblings.py`** — probes and proxies to sibling servers (Open Fantasia,
+  Olly Voice).
+- **`static/`** — web UI (Chat / Image / Audio) served by the server.
+- **`desktop/`** — Tauri v2 desktop app + NSIS installer with an 8-screen guided
+  setup wizard; packages the server via `server.spec` (PyInstaller).
+- **`scripts/package-release.ps1` / `.sh`** — single-command release packaging for
+  the server bundle and the NSIS installer.
 
 ## Architectural decisions
 
@@ -133,6 +165,22 @@ The server must:
   and, in later phases, routes to them or prompts the user to install them. This
   keeps `private-ai-server` as a text/vision brain while offering a unified entry
   point to the full local inference stack.
+- **Native installer with guided setup (Tauri + NSIS).**
+  *Implicit alternative:* ship a zip + terminal-based setup instructions.
+  *Chosen:* a Tauri desktop app that doubles as an NSIS installer with an 8-screen
+  wizard (Detect → Services → Run mode → Models → Install → Test → Launch → Done),
+  so non-technical users reach a working Chat + Image + Voice UI without a terminal.
+- **Server-served web UI (`static/`).**
+  *Implicit alternative:* a separate frontend app (React/Vite) with its own build
+  and dev server.
+  *Chosen:* a lightweight vanilla JS/CSS UI served directly by FastAPI at `/`, so
+  the same server powers the browser UI and the Tauri webview with zero extra build
+  tooling or deployment surface.
+- **Small server bootstrap + on-first-run runtime provisioning.**
+  *Implicit alternative:* bundle the full torch/transformers runtime in the installer.
+  *Chosen:* PyInstaller ships a ~30 MB bootstrap (heavy ML libs excluded) to stay
+  under the NSIS 2 GB file limit; the wizard installs the CUDA runtime on first run
+  based on detected GPU.
 
 ## Sibling servers
 

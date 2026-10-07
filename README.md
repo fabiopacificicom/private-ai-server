@@ -1,10 +1,28 @@
-# AI Inference Server
+# Private AI — Local Inference Server & Desktop Stack
 
-A high-performance, GPU-optimized FastAPI server for serving Hugging Face language models. Built as an Ollama-compatible alternative with dynamic model loading, automatic 4-bit quantization for large models, and explicit control over downloads.
+A self-hosted, Ollama-compatible **local AI stack** that runs entirely on your own
+hardware. It combines a GPU-optimized FastAPI server (`app.py` + `src/`) with a
+**native Windows desktop app and installer** (Tauri + NSIS) that walks non-technical
+users through setup, plus a **web UI** for Chat, Image, Video, and Audio.
+
+The server dynamically loads Hugging Face language models with GPU acceleration,
+automatic 4-bit quantization for large models, explicit download control, and
+intelligent caching. It also **orchestrates sibling microservices** (Open Fantasia
+for image & video generation, Olly Voice for speech) so a single entry point covers
+text, vision, image, video, and voice.
+
+> **Current status — v1.1.0**: Production-ready. Local inference orchestrator with
+> model modality classification, sibling-server orchestration, web UI, and a native
+> guided-setup installer. See [Roadmap](#roadmap) for details.
+
+[![Hippocratic License HL3-LAW-MIL-SV](https://img.shields.io/static/v1?label=Hippocratic%20License&message=HL3-LAW-MIL-SV&labelColor=5e2751&color=bc8c3d)](https://firstdonoharm.dev/version/3/0/law-mil-sv.html)
 
 ## Overview
 
-**What it does:** Dynamically loads and serves LLMs from Hugging Face Hub with GPU acceleration, automatic quantization, and intelligent caching.
+**What it does:** Runs a private local inference stack on your machine — a FastAPI
+server that loads and serves LLMs from Hugging Face Hub with GPU acceleration,
+automatic quantization, and intelligent caching, plus a desktop installer and web UI
+so you never need a terminal.
 
 **Why use it:**
 
@@ -14,6 +32,9 @@ A high-performance, GPU-optimized FastAPI server for serving Hugging Face langua
 - 🔧 **Production-ready**: Background job system for non-blocking downloads, CUDA OOM prevention, MoE/custom model support
 - 📊 **Observable**: Comprehensive diagnostics endpoints (`/health`, `/status`, `/diag`, `/jobs`)
 - 🔄 **Streaming**: Real-time response streaming with Server-Sent Events (SSE)
+- 🖥️ **No-terminal setup**: Native Windows installer with an 8-screen guided setup wizard (Tauri + NSIS)
+- 🌐 **Web UI**: Chat, Image, Video, and Audio modes served directly by the server
+- 🧩 **Sibling orchestration**: Routes image & video generation (Open Fantasia) and speech (Olly Voice) from one entry point
 
 **Key Features:**
 
@@ -66,22 +87,63 @@ pip install -r requirements.txt
 python -m uvicorn app:app --host 0.0.0.0 --port 8005
 ```
 
-### Desktop App (Tauri)
+### Desktop App & Installer (Tauri)
 
-There's a native **Windows desktop wrapper** in [`desktop/`](desktop/) that opens the
-web UI in its own window. It's a thin Tauri shell that loads `http://127.0.0.1:8005/`.
+There's a native **Windows desktop app + NSIS installer** in [`desktop/`](desktop/)
+that ships the server as a one-click installer with an 8-screen guided setup wizard
+(Detect → Services → Run mode → Models → Install → Test → Launch → Done). It lets
+non-technical users reach a working Chat + Image + Voice UI without a terminal.
 
 ```powershell
-# 1. Start the server (above), then:
+# Package the stripped server bootstrap (from repo root)
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm server.spec
+
+# Build the NSIS installer
 cd desktop
-npm install             # first time only
-.\build.ps1             # debug build
-.\src-tauri\target\debug\private-ai-desktop.exe
+.\build.ps1 -Release
+# output: src-tauri\target\release\bundle\nsis\Private AI_1.1.0_x64-setup.exe
 ```
+
+For a **single-command release build** that rebuilds both the server bundle and
+the installer, use:
+
+```powershell
+.\scripts\package-release.ps1
+```
+
+A cross-platform `scripts/package-release.sh` is also provided for
+Linux/WSL/CI.
 
 - Release build with installer: `.\build.ps1 -Release` (output in `src-tauri\target\release\bundle\`)
 - Prerequisites: Rust (rustup), MSVC Build Tools, WebView2 (preinstalled on Win11)
+- The installer ships a ~30 MB server bootstrap; the full CUDA runtime is
+  provisioned on first run by the setup wizard (keeps the installer under NSIS's
+  2 GB limit).
 - See [`desktop/README.md`](desktop/README.md) for full details.
+
+### Screenshots
+
+The **guided setup wizard** walks through 8 screens and the **web UI** provides
+Chat, Image, and Audio modes. All screenshots live in [`assets/screenshots/`](assets/screenshots/).
+
+#### Setup wizard (native installer)
+
+| | |
+|---|---|
+| **1. Detect** — probes running services | **2. Services** — choose what to install |
+| ![Detect](assets/screenshots/setup-01-detect.png) | ![Services](assets/screenshots/setup-02-services.png) |
+| **3. Run mode** — local vs Docker + install dir | **4. Models** — model storage location |
+| ![Run mode](assets/screenshots/setup-03-runtime.png) | ![Models](assets/screenshots/setup-04-models.png) |
+| **5. Install** — dependency checklist | **6. Test** — service connection checks |
+| ![Install](assets/screenshots/setup-05-install.png) | ![Test](assets/screenshots/setup-06-test.png) |
+| **7. Launch** — desktop app or browser | **8. Done** — optional start-on-login |
+| ![Launch](assets/screenshots/setup-07-launch.png) | ![Done](assets/screenshots/setup-08-done.png) |
+
+#### Web UI
+
+| Chat | Chat (collapsed sidebar) | Image | Audio |
+|---|---|---|---|
+| ![Chat](assets/screenshots/ui-chat.png) | ![Chat collapsed](assets/screenshots/ui-chat-collapsed.png) | ![Image](assets/screenshots/ui-image.png) | ![Audio](assets/screenshots/ui-audio.png) |
 
 ### WSL2 Startup (Linux / vLLM mode)
 
@@ -689,11 +751,11 @@ The `/chat/multimodal` endpoint is the recommended backend for voice pipelines a
 
 ---
 
-## Sibling orchestration (image generation & voice)
+## Sibling orchestration (image, video & voice)
 
-This server is the **text/vision brain** of a local inference stack. Image generation
-(Open Fantasia :8765) and voice (Olly Voice :8766) are handled by dedicated sibling
-servers. This server probes them, routes to them, and guides setup.
+This server is the **text/vision brain** of a local inference stack. Image & video
+generation (Open Fantasia :8765) and voice (Olly Voice :8766) are handled by
+dedicated sibling servers. This server probes them, routes to them, and guides setup.
 
 ### POST /generate — image generation (→ Open Fantasia)
 
@@ -713,6 +775,21 @@ If Open Fantasia isn't running, returns **503** with an install command:
 { "detail": "Open Fantasia (http://127.0.0.1:8765) is not running.\nInstall it with:\n  git clone https://github.com/fabiopacifici-bot/open-fantasia-imagegen\nThen start it and retry." }
 ```
 
+### POST /video — video generation (→ Open Fantasia)
+
+Routes a text-to-video request to Open Fantasia's `/video` endpoint (Wan2.1). The
+JSON body is forwarded as-is, and the **raw MP4 bytes** (`video/mp4`) are returned
+with the `X-Saved-Paths` header pointing to where the sibling saved the file.
+
+```bash
+curl -X POST http://localhost:8005/video \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"a cat walking through a neon city at night","model":"Wan-AI/Wan2.1-T2V-1.3B"}'
+```
+
+If Open Fantasia isn't running, returns **503** with an install command (same as
+`/generate`).
+
 ### POST /tts — text to speech (→ Olly Voice)
 
 Routes a TTS request to Olly Voice. The JSON body's `text` field is sent to the
@@ -726,9 +803,9 @@ curl -X POST http://localhost:8005/tts \
 
 If Olly Voice isn't running, returns **503** with an install command.
 
-> **Note:** both `/generate` and `/tts` return **raw binary bytes** (image/audio),
-> not JSON. When a sibling is unreachable the proxy fails fast with a 503 and the
-> install command instead of hanging.
+> **Note:** `/generate`, `/video`, and `/tts` return **raw binary bytes**
+> (image/video/audio), not JSON. When a sibling is unreachable the proxy fails fast
+> with a 503 and the install command instead of hanging.
 
 ### GET /services — sibling status + install commands
 
@@ -739,6 +816,9 @@ curl http://localhost:8005/services
 ```json
 {
   "imagegen": { "available": false, "url": "http://127.0.0.1:8765",
+                "service": "Open Fantasia",
+                "install": "git clone https://github.com/fabiopacifici-bot/open-fantasia-imagegen" },
+  "video":    { "available": false, "url": "http://127.0.0.1:8765",
                 "service": "Open Fantasia",
                 "install": "git clone https://github.com/fabiopacifici-bot/open-fantasia-imagegen" },
   "voice":    { "available": false, "url": "http://127.0.0.1:8766",
@@ -753,7 +833,6 @@ install commands) so you can see which siblings are up and install the missing o
 > **Note:** if the siblings run inside WSL, they may not be reachable at `127.0.0.1`
 > from the Windows host. Point `IMAGE_SERVER_URL` / `VOICE_SERVER_URL` at the
 > WSL-reachable address or set up WSL port forwarding so the probe can reach them.
-
 
 ## Security
 
@@ -870,12 +949,13 @@ See [`.specs/ROADMAP.md`](.specs/ROADMAP.md) for detailed feature roadmap and ti
 
 **Current Release (v1.1.0)**: ✅ Local Inference Orchestrator - COMPLETED
 
-- ✅ Model modality classification (chat / vision / imagegen / voice / embeddings)
+- ✅ Model modality classification (chat / vision / imagegen / video / voice / embeddings)
 - ✅ Sibling-server orchestration: `POST /generate` (Open Fantasia :8765),
-  `POST /tts` (Olly Voice :8766), `GET /services`
+  `POST /video` (Open Fantasia :8765), `POST /tts` (Olly Voice :8766), `GET /services`
 - ✅ Fast-fail proxy with short connect timeout + long read timeout
-- ✅ Web UI: Services panel, setup wizard, and Image/Audio generation modes
-- ✅ Tauri desktop app wrapper (`desktop/`)
+- ✅ Web UI: Services panel, setup wizard, and Image/Video/Audio generation modes
+- ✅ Native installer with guided setup (Tauri + NSIS, 8-screen wizard)
+- ✅ Server packaging (PyInstaller, ~30 MB bootstrap under NSIS 2 GB limit)
 
 **Next Release (v1.5)**: Advanced Features
 

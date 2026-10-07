@@ -8,6 +8,7 @@ and surface a clear error (with install instructions) when one is unreachable.
 
 Sibling contracts (confirmed against the running services):
 - Open Fantasia  POST /generate — JSON body -> raw image bytes (e.g. image/png)
+- Open Fantasia  POST /video    — JSON body -> raw mp4 bytes (video/mp4)
 - Olly Voice    POST /tts      — multipart/form-data (text=...) -> wav bytes
 """
 
@@ -28,6 +29,7 @@ class SiblingUnavailable(Exception):
 SIBLING_INSTALL: Dict[str, str] = {
     "imagegen": "git clone https://github.com/fabiopacifici-bot/open-fantasia-imagegen",
     "voice": "git clone https://github.com/fabiopacificicom/olly-voice-server",
+    "video": "git clone https://github.com/fabiopacifici-bot/open-fantasia-imagegen",
 }
 
 # Short connect timeout so unreachable siblings fail fast (503) instead of
@@ -140,6 +142,12 @@ def get_sibling_config(modality: str) -> Dict[str, Any]:
             "url": config.IMAGE_SERVER_URL,
             "service": "Open Fantasia",
             "install": SIBLING_INSTALL["imagegen"],
+        }
+    if modality == "video":
+        return {
+            "url": config.IMAGE_SERVER_URL,
+            "service": "Open Fantasia",
+            "install": SIBLING_INSTALL["video"],
         }
     if modality == "voice":
         return {

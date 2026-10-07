@@ -25,12 +25,19 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "Building Private AI desktop app..." -ForegroundColor Cyan
-Push-Location (Join-Path $root "src-tauri")
+Push-Location $root
 try {
     if ($Release) {
-        cmd /c "call `"$vcvars`" >nul 2>&1 && cargo tauri build --release"
+        # Use the npm-installed Tauri CLI (cargo tauri is not installed).
+        cmd /c "call `"$vcvars`" >nul 2>&1 && npm run tauri build -- --bundles nsis"
     } else {
-        cmd /c "call `"$vcvars`" >nul 2>&1 && cargo build"
+        Push-Location (Join-Path $root "src-tauri")
+        try {
+            cmd /c "call `"$vcvars`" >nul 2>&1 && cargo build"
+        }
+        finally {
+            Pop-Location
+        }
     }
     if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 }

@@ -23,6 +23,11 @@ class TestClassifyModality:
         assert classify_modality("stabilityai/sd-turbo") == "imagegen"
         assert classify_modality("google/diffusiongemma-26B-A4B-it") == "imagegen"
 
+    def test_video_model(self):
+        assert classify_modality("Wan-AI/Wan2.1-T2V-1.3B") == "video"
+        assert classify_modality("Wan-AI/Wan2.2-T2V-5B") == "video"
+        assert classify_modality("THUDM/CogVideoX-2b") == "video"
+
     def test_voice_model(self):
         assert classify_modality("FunAudioLLM/CosyVoice2-0.5B") == "voice"
         assert classify_modality("Qwen/Qwen3-TTS-12Hz-1.7B-Base") == "voice"
@@ -43,6 +48,8 @@ class TestCheckServices:
             result = check_services()
         assert result["imagegen"]["available"] is True
         assert result["imagegen"]["service"] == "Open Fantasia"
+        assert result["video"]["available"] is True
+        assert result["video"]["service"] == "Open Fantasia"
         assert result["voice"]["available"] is True
         assert result["voice"]["service"] == "Olly Voice"
 
@@ -50,6 +57,7 @@ class TestCheckServices:
         with mock.patch("classify._probe", return_value=False):
             result = check_services()
         assert result["imagegen"]["available"] is False
+        assert result["video"]["available"] is False
         assert result["voice"]["available"] is False
 
     def test_mixed_availability(self):
@@ -66,6 +74,8 @@ class TestCheckServices:
         with mock.patch("classify._probe", return_value=True):
             result = check_services()
         assert result["imagegen"]["url"]
+        assert result["video"]["url"]
         assert result["voice"]["url"]
         assert "8765" in result["imagegen"]["url"]
+        assert "8765" in result["video"]["url"]
         assert "8766" in result["voice"]["url"]

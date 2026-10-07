@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-08-17
+
+### Added
+- **Native Installer with Guided Setup**: One-click NSIS installer + Tauri desktop
+  app with an 8-screen wizard (Detect → Services → Run mode → Models → Install →
+  Test → Launch → Done) so non-technical users reach a working Chat + Image +
+  Voice UI without a terminal.
+- **18 Tauri Rust commands** (`desktop/src-tauri/src/lib.rs`) covering detection,
+  path picking, autostart, provisioning, and bundled-server launch.
+- **Server packaging** via PyInstaller (`server.spec`, `scripts/build-server.ps1`)
+  and `app.py` `__main__` block to run uvicorn directly.
+- **Small server bootstrap**: base bundle excludes heavy ML libs (torch,
+  transformers, bitsandbytes, accelerate, etc.) to stay under the NSIS 2 GB file
+  limit; the full CUDA runtime is provisioned on first run by the setup wizard.
+
+### Fixed
+- **NSIS `Internal compiler error #12345`**: server bundle was 4.29 GB (over the
+  2 GB NSIS limit); shrinking it to ~30 MB resolves the installer build.
+- **Tauri E0255 `__cmd__ defined multiple times`**: commands must be non-`pub fn`
+  in Tauri 2.11.5.
+
 ## [1.0.0] - 2025-12-18
 
 ### Added

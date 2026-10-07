@@ -1,0 +1,48 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.whl
+
+# --- Virtual envs (Linux venvs on Windows drives fail to pack) ---
+.venv/
+.venv-wsl/
+venv/
+env/
+ENV/
+.conda/
+
+# --- Cloud / data (huge, mounted at runtime, never baked in) ---
+E:/
+E:*/**/models/**
+models/
+*.gguf
+*.safetensors
+*.bin
+HF_DATASETS_CACHE/
+HF_HOME/
+
+# --- Desktop / frontend (built separately) ---
+desktop/
+node_modules/
+package-lock.json
+
+# --- VCS / IDE / OS ---
+.git/
+.gitignore
+.specs/
+*.md
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Runtime / logs / temp ---
+*.log
+nohup.out
+.tmp/
+tmp/

@@ -11,6 +11,9 @@ test_jobs.db
 .vscode/
 E*
 .venv-wsl/
+# PyInstaller build output (root only — desktop/dist is the installer frontend)
+/build/
+/dist/
 # Runtime / generated artifacts
 server.log
 app_backup.py

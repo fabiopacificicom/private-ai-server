@@ -12,6 +12,7 @@ import config
 import state
 import model_cache as mcache
 from loader import load_model, extract_text_from_pipeline_result
+from quant import kv_cache_dtype_kwargs
 from gguf import build_llama_cpp_prompt
 from multimodal import load_multimodal_model, run_multimodal_inference, stream_multimodal_response
 from schemas import ChatRequest, MultimodalChatRequest
@@ -103,6 +104,7 @@ async def _stream_transformers(messages, prompt: str, max_tokens: int, temperatu
                 except Exception:
                     pass
                 gk = {"max_new_tokens": max_tokens, "streamer": streamer}
+                gk.update(kv_cache_dtype_kwargs())
                 gk.update({"do_sample": True, "temperature": temperature} if temperature > 0.0
                            else {"do_sample": False})
                 model_obj.generate(input_ids=ids, **gk)
@@ -212,6 +214,7 @@ def generate_response(request: ChatRequest, model_name: str, prompt: str, backen
                     "max_new_tokens": request.max_tokens,
                     "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
                 }
+                gk.update(kv_cache_dtype_kwargs())
                 if request.temperature and request.temperature > 0.0:
                     gk.update({"do_sample": True, "temperature": request.temperature, "top_p": 0.95})
                 else:

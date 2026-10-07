@@ -6,7 +6,7 @@
 let conversation = [];
 let abortController = null;
 let genStartTime = null;
-let currentMode = 'chat'; // 'chat' | 'image' | 'audio'
+let currentMode = 'chat'; // 'chat' | 'image' | 'video' | 'audio'
 
 const els = {
   model: document.getElementById('model'),
@@ -24,6 +24,26 @@ const els = {
   tokPerSec: document.getElementById('tokPerSec'),
   genTime: document.getElementById('genTime'),
 };
+
+// ------------------------------------------------------------------
+// Sidebar collapse toggle
+// ------------------------------------------------------------------
+(function () {
+  const btn = document.getElementById('sidebarToggleBtn');
+  if (!btn) return;
+  // Restore persisted state
+  try {
+    if (localStorage.getItem('pai-sidebar-collapsed') === '1') {
+      document.body.classList.add('sidebar-collapsed');
+    }
+  } catch (e) { /* ignore */ }
+  btn.addEventListener('click', () => {
+    const collapsed = document.body.classList.toggle('sidebar-collapsed');
+    try {
+      localStorage.setItem('pai-sidebar-collapsed', collapsed ? '1' : '0');
+    } catch (e) { /* ignore */ }
+  });
+})();
 
 // ------------------------------------------------------------------
 // Helpers
@@ -76,6 +96,7 @@ async function refreshModels() {
       chat: [],
       vision: [],
       imagegen: [],
+      video: [],
       voice: [],
       embeddings: [],
       unknown: [],
@@ -90,11 +111,12 @@ async function refreshModels() {
       chat: 'Chat',
       vision: 'Vision',
       imagegen: 'Image Gen',
+      video: 'Video Gen',
       voice: 'Voice',
       embeddings: 'Embeddings',
       unknown: 'Other',
     };
-    const groupOrder = ['chat', 'vision', 'imagegen', 'voice', 'embeddings', 'unknown'];
+    const groupOrder = ['chat', 'vision', 'imagegen', 'video', 'voice', 'embeddings', 'unknown'];
 
     groupOrder.forEach((mod) => {
       const list = groups[mod];
@@ -137,6 +159,7 @@ async function refreshModels() {
 // ------------------------------------------------------------------
 const SERVICE_LABELS = {
   imagegen: { name: 'Open Fantasia', port: 8765, icon: 'fa-image' },
+  video: { name: 'Open Fantasia', port: 8765, icon: 'fa-video' },
   voice: { name: 'Olly Voice', port: 8766, icon: 'fa-microphone' },
 };
 
@@ -506,6 +529,12 @@ function addMediaMessage(kind, blob, url, meta) {
     img.src = url;
     img.alt = 'Generated image';
     bubble.appendChild(img);
+  } else if (kind === 'video') {
+    const video = document.createElement('video');
+    video.className = 'gen-video';
+    video.controls = true;
+    video.src = url;
+    bubble.appendChild(video);
   } else if (kind === 'audio') {
     const audio = document.createElement('audio');
     audio.className = 'gen-audio';
@@ -559,6 +588,39 @@ async function generateImage() {
   }
 }
 
+async function generateVideo() {
+  const prompt = els.message.value.trim();
+  if (!prompt) { setGenStatus('Enter a prompt for video generation.', true); return; }
+
+  setGenStatus('🎬 Generating video via Open Fantasia… (this can take a few minutes)');
+  els.submit.disabled = true;
+  addMessage('user', prompt);
+  els.message.value = '';
+  const selectedModel = els.model.value;
+  try {
+    const res = await fetch('/video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: prompt, model: selectedModel || null }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Video generation failed (HTTP ' + res.status + ')');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const saved = res.headers.get('X-Saved-Paths') || '';
+    addMediaMessage('video', blob, url, saved ? 'Saved: ' + saved : '');
+    setGenStatus('✅ Video generated.');
+  } catch (err) {
+    console.error(err);
+    setGenStatus('❌ ' + err.message, true);
+    addMessage('assistant', 'Error: ' + err.message);
+  } finally {
+    els.submit.disabled = false;
+  }
+}
+
 async function generateAudio() {
   const text = els.message.value.trim();
   if (!text) { setGenStatus('Enter text to synthesize speech.', true); return; }
@@ -602,6 +664,10 @@ function setMode(mode) {
     els.message.placeholder = 'Describe the image to generate… (Enter to generate)';
     submit.innerHTML = '<i class="fas fa-image"></i>';
     hint.textContent = 'Generates an image via Open Fantasia (:8765).';
+  } else if (mode === 'video') {
+    els.message.placeholder = 'Describe the video to generate… (Enter to generate)';
+    submit.innerHTML = '<i class="fas fa-video"></i>';
+    hint.textContent = 'Generates a short video via Open Fantasia (:8765). May take a few minutes.';
   } else if (mode === 'audio') {
     els.message.placeholder = 'Type text to speak… (Enter to synthesize)';
     submit.innerHTML = '<i class="fas fa-volume-up"></i>';
@@ -615,18 +681,63 @@ function setMode(mode) {
 }
 
 // ------------------------------------------------------------------
-// Pull model
+// Pull model (searchable Hub select + progress)
 // ------------------------------------------------------------------
-async function pullModel() {
-  const input = document.getElementById('pullInput');
+async function searchHub() {
+  const q = document.getElementById('pullSearch').value.trim();
+  const select = document.getElementById('hubSelect');
+  if (!q) { select.style.display = 'none'; return; }
+  // Show loading option
+  select.innerHTML = '<option value="">Searching…</option>';
+  select.style.display = 'block';
+  try {
+    const res = await fetch('/hub/search?q=' + encodeURIComponent(q) + '&limit=25');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const models = data.models || [];
+    select.innerHTML = '<option value="">Select a model to pull…</option>';
+    if (models.length === 0) {
+      select.innerHTML = '<option value="">No models found.</option>';
+      return;
+    }
+    models.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      const tag = m.modality || m.pipeline_tag || '';
+      const dl = m.downloads != null ? ' · ' + (m.downloads / 1000).toFixed(0) + 'k' : '';
+      opt.textContent = m.id + (tag ? ' (' + tag + ')' : '') + dl;
+      select.appendChild(opt);
+    });
+  } catch (err) {
+    select.innerHTML = '<option value="">Error: ' + escapeHtml(err.message) + '</option>';
+  }
+}
+
+function setPullStatus(msg, isError) {
   const status = document.getElementById('pullStatus');
-  const model = input.value.trim();
+  status.style.display = 'block';
+  status.textContent = msg || '';
+  status.style.color = isError ? 'var(--danger)' : 'var(--text-muted)';
+  if (!msg) status.style.display = 'none';
+}
+
+function setPullProgress(pct) {
+  const wrap = document.getElementById('pullProgressWrap');
+  const bar = document.getElementById('pullProgressBar');
+  if (pct == null) { wrap.style.display = 'none'; bar.style.width = '0%'; return; }
+  wrap.style.display = 'block';
+  bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+}
+
+async function pullModel() {
+  const select = document.getElementById('hubSelect');
+  const model = select.value ? select.value.trim() : '';
   if (!model) {
-    alert('Enter a model id to pull (e.g. hf.co/org/repo or path.gguf)');
+    alert('Search the Hub and select a model to pull.');
     return;
   }
-  status.style.display = 'block';
-  status.textContent = 'Starting pull of ' + model + '…';
+  setPullStatus('Starting pull of ' + model + '…');
+  setPullProgress(0);
   document.getElementById('pullBtn').disabled = true;
   try {
     const res = await fetch('/pull', {
@@ -634,41 +745,55 @@ async function pullModel() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: model, quantize: 'auto', init: false }),
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Pull failed (HTTP ' + res.status + ')');
+    }
     const data = await res.json();
     const jobId = data.job_id;
-    status.textContent = 'Pulling… (job ' + jobId.slice(0, 8) + ')';
+    setPullStatus('Pulling… (job ' + jobId.slice(0, 8) + ')');
 
     // Poll job progress
     const poll = setInterval(async () => {
       try {
         const jres = await fetch('/jobs/' + jobId);
+        if (!jres.ok) throw new Error('HTTP ' + jres.status);
         const job = await jres.json();
         if (job.status === 'succeeded') {
           clearInterval(poll);
-          status.textContent = '✅ Pulled ' + model;
+          setPullProgress(100);
+          setPullStatus('✅ Pulled ' + model);
           document.getElementById('pullBtn').disabled = false;
-          input.value = '';
+          select.value = '';
+          setPullProgress(null);
           refreshModels();
         } else if (job.status === 'failed') {
           clearInterval(poll);
-          status.textContent = '❌ Failed: ' + (job.error || 'unknown error');
-          status.style.color = 'var(--danger)';
+          setPullProgress(null);
+          setPullStatus('❌ Failed: ' + (job.error || 'unknown error'), true);
           document.getElementById('pullBtn').disabled = false;
         } else {
+          // progress: prefer explicit progress, else bytes/total
+          let pct = job.progress;
+          if (pct == null && job.total_bytes) {
+            pct = (job.downloaded_bytes || 0) / job.total_bytes * 100;
+          }
+          if (pct != null) setPullProgress(Math.round(pct * 100));
           const dl = job.downloaded_bytes || 0;
           const gb = (dl / (1024 ** 3)).toFixed(2);
-          status.textContent = 'Downloading… ' + gb + ' GB';
+          const total = job.total_bytes ? ' / ' + (job.total_bytes / (1024 ** 3)).toFixed(2) + ' GB' : '';
+          setPullStatus('Downloading… ' + gb + ' GB' + total);
         }
       } catch (e) {
         clearInterval(poll);
-        status.textContent = 'Error polling job';
+        setPullProgress(null);
+        setPullStatus('Error polling job: ' + e.message, true);
         document.getElementById('pullBtn').disabled = false;
       }
-    }, 2000);
+    }, 1500);
   } catch (err) {
-    status.textContent = '❌ ' + err.message;
-    status.style.color = 'var(--danger)';
+    setPullProgress(null);
+    setPullStatus('❌ ' + err.message, true);
     document.getElementById('pullBtn').disabled = false;
   }
 }
@@ -678,6 +803,7 @@ async function pullModel() {
 // ------------------------------------------------------------------
 function handleSubmit() {
   if (currentMode === 'image') { generateImage(); return; }
+  if (currentMode === 'video') { generateVideo(); return; }
   if (currentMode === 'audio') { generateAudio(); return; }
   sendChat();
 }
@@ -705,8 +831,9 @@ function init() {
     els.genTime.textContent = '—';
   });
   document.getElementById('pullBtn').addEventListener('click', pullModel);
-  document.getElementById('pullInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); pullModel(); }
+  document.getElementById('pullSearchBtn').addEventListener('click', searchHub);
+  document.getElementById('pullSearch').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); searchHub(); }
   });
   document.getElementById('setupWizardBtn').addEventListener('click', () => {
     openSetupWizard();

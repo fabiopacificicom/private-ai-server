@@ -1000,3 +1000,41 @@ Phase 1 (v1.0) complete when:
 - Keep `app.py` single-file for core logic; `database.py` is acceptable separation
 - All changes backward-compatible (no breaking API changes)
 - Update `.github/copilot-instructions.md` with new patterns as implemented
+
+---
+
+## Appendix — Advanced Quantization Groundwork (Issue #5)
+
+Scope: lay the config surface + guarded hooks for EXL2 / AWQ-style loading and
+INT8/INT4 KV-cache. Running a 250k-context 30B MoE end-to-end on the 16GB
+RTX 4090 Mobile is a separate research exercise, not wired here.
+
+### What exists today (transformers fallback)
+- `device_map="auto"` + `max_memory` (GPU capped by `MAX_GPU_MEMORY`=12GiB,
+  CPU pool `MAX_CPU_MEMORY`=48GiB) — layer-splits across GPU + system RAM.
+- NF4 4-bit (`BitsAndBytesConfig(load_in_4bit=True, ...)`)
+- `PYTORCH_ALLOC_CONF=expandable_segments:True` set in `config.py` before torch.
+- vLLM stays the default engine where installed; transformers is the fallback.
+
+### Added in `feat/issue2-memory-split-issue5-quant`
+- `TRANSFORMERS_QUANT` env (`auto|nf4|fp16|awq|exl2`, default `auto`) →
+  `quant.should_quantize()` decision surface.
+- `KV_CACHE_DTYPE` env (`int8|float8`, default unset) → `quant.kv_cache_dtype_kwargs()`
+  passed guarded into transformers `generate()` (chat streaming + non-streaming).
+- Defaults aligned for the target GPU: `MAX_CACHE_MODELS=1`, `MAX_CPU_MEMORY=48GiB`.
+
+### Not bundled — dependency + integration point
+EXL2 (`exllamav2`) and AWQ (`autoawq`) are NOT dependencies of this server.
+They need their own engines (exllamav2 / autoawq + model-format converters) and
+would be servable only via dedicated loader backends, not the transformers path.
+To wire later:
+1. Add `exllamav2` / `autoawq` as optional deps (lazy-import guard like vllm).
+2. Model picker / classify step to select quantized repo formats (`.safetensors`
+   AWQ or `.safetensors`/`.exl2` dirs) and set `preferred_quantized`.
+3. A new loader backend (mirror the `_try_vllm` / `_load_transformers` pattern)
+   that reads `TRANSFORMERS_QUANT=awq|exl2` and dispatches to the engine.
+4. For AWQ via transformers: `quantization_config=AwqConfig(bits=4)` + the repo's
+   already-quantized weights; requires `autoawq`.
+
+Until then `TRANSFORMERS_QUANT=awq|exl2` logs a warning and falls back to the
+auto NF4 decision (non-breaking).
