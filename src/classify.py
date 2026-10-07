@@ -18,6 +18,10 @@ _IMAGEGEN_KEYWORDS: Set[str] = {
 _VOICE_KEYWORDS: Set[str] = {
     "tts", "cosyvoice", "whisper", "voice", "speech", "audio", "stt",
 }
+_VIDEO_KEYWORDS: Set[str] = {
+    "wan", "video-gen", "videogen", "t2v", "i2v", "text-to-video",
+    "image-to-video", "cogvideo", "sora", "mochi", "ltx", "hunyuan-video",
+}
 _EMBEDDING_KEYWORDS: Set[str] = {
     "embedding", "embed", "retrieval",
 }
@@ -30,6 +34,7 @@ _VISION_KEYWORDS: Set[str] = {
 MODALITY_SERVICE: Dict[str, str] = {
     "imagegen": "Open Fantasia",
     "voice": "Olly Voice",
+    "video": "Open Fantasia",
 }
 
 
@@ -44,6 +49,8 @@ def classify_modality(model_id: str) -> str:
 
     if any(k in low for k in _IMAGEGEN_KEYWORDS):
         return "imagegen"
+    if any(k in low for k in _VIDEO_KEYWORDS):
+        return "video"
     if any(k in low for k in _VOICE_KEYWORDS):
         return "voice"
     if any(k in low for k in _EMBEDDING_KEYWORDS):
@@ -68,6 +75,12 @@ def check_services() -> Dict[str, Dict[str, object]]:
     result: Dict[str, Dict[str, object]] = {}
     if config.IMAGE_SERVER_URL:
         result["imagegen"] = {
+            "available": _probe(config.IMAGE_SERVER_URL),
+            "url": config.IMAGE_SERVER_URL,
+            "service": "Open Fantasia",
+        }
+        # Video is served by the same Open Fantasia sibling
+        result["video"] = {
             "available": _probe(config.IMAGE_SERVER_URL),
             "url": config.IMAGE_SERVER_URL,
             "service": "Open Fantasia",

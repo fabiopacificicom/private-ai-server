@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Private AI — Setup</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar / step indicator -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">◈</div>
+        <div class="brand-text">
+          <div class="brand-title">Private AI</div>
+          <div class="brand-sub">Local inference stack</div>
+        </div>
+      </div>
+      <nav class="steps" id="stepNav"></nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="content">
+      <!-- Screen A: Detect running servers -->
+      <section class="screen" id="screen-a" data-step="1">
+        <h1>Welcome to Private AI</h1>
+        <p class="lead">Let's check what's already running on this machine.</p>
+        <div class="service-list" id="detectList"></div>
+        <div class="actions">
+          <button class="btn primary" id="aContinue">Continue</button>
+        </div>
+      </section>
+
+      <!-- Screen B: Choose services -->
+      <section class="screen" id="screen-b" data-step="2" hidden>
+        <h1>Choose services to install</h1>
+        <p class="lead">Select which services you want. Already running ones are checked.</p>
+        <div class="service-list" id="servicesList"></div>
+        <div class="actions">
+          <button class="btn ghost" data-back>Back</button>
+          <button class="btn primary" id="bContinue">Continue</button>
+        </div>
+      </section>
+
+      <!-- Screen C: Deployment mode + install dir -->
+      <section class="screen" id="screen-c" data-step="3" hidden>
+        <h1>How should Private AI run?</h1>
+        <div class="radio-card" id="modeLocal">
+          <div class="radio-check"></div>
+          <div>
+            <div class="radio-title">Local (recommended)</div>
+            <div class="radio-desc">Runs directly on this machine using Python + CUDA.</div>
+          </div>
+        </div>
+        <div class="radio-card" id="modeDocker">
+          <div class="radio-check"></div>
+          <div>
+            <div class="radio-title">Docker container</div>
+            <div class="radio-desc">Runs isolated in a container. Requires Docker.</div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Installation directory</label>
+          <div class="path-row">
+            <input type="text" id="installDir" readonly />
+            <button class="btn small" id="pickInstallDir">Browse…</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" data-back>Back</button>
+          <button class="btn primary" id="cContinue">Continue</button>
+        </div>
+      </section>
+
+      <!-- Screen D: Models directory -->
+      <section class="screen" id="screen-d" data-step="4" hidden>
+        <h1>Where should models be stored?</h1>
+        <p class="lead">Local models will be downloaded here.</p>
+        <div class="field">
+          <label>Model storage directory</label>
+          <div class="path-row">
+            <input type="text" id="modelsDir" readonly />
+            <button class="btn small" id="pickModelsDir">Browse…</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" data-back>Back</button>
+          <button class="btn primary" id="dContinue">Continue</button>
+        </div>
+      </section>
+
+      <!-- Screen E: Requirements + dependency install -->
+      <section class="screen" id="screen-e" data-step="5" hidden>
+        <h1>Checking system requirements</h1>
+        <p class="lead">Installing dependencies based on your choices…</p>
+        <div class="checklist" id="reqChecklist"></div>
+        <div class="actions">
+          <button class="btn ghost" id="eBack">Back</button>
+          <button class="btn primary" id="eContinue" hidden>Continue</button>
+        </div>
+      </section>
+
+      <!-- Screen F: Service status + test connections -->
+      <section class="screen" id="screen-f" data-step="6" hidden>
+        <h1>Services installed</h1>
+        <p class="lead">Test each service's connection below.</p>
+        <div class="service-list" id="statusList"></div>
+        <div class="actions">
+          <button class="btn ghost" data-back>Back</button>
+          <button class="btn primary" id="fContinue">Continue</button>
+        </div>
+      </section>
+
+      <!-- Screen G: Launch choice -->
+      <section class="screen" id="screen-g" data-step="7" hidden>
+        <h1>Ready to launch</h1>
+        <p class="lead">How would you like to start Private AI?</p>
+        <div class="radio-card" id="launchDesktop">
+          <div class="radio-check"></div>
+          <div>
+            <div class="radio-title">Launch the desktop app</div>
+            <div class="radio-desc">Open Private AI in this native window.</div>
+          </div>
+        </div>
+        <div class="radio-card" id="launchWeb">
+          <div class="radio-check"></div>
+          <div>
+            <div class="radio-title">Open the web UI in a browser</div>
+            <div class="radio-desc">Start the server and open the web interface.</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" data-back>Back</button>
+          <button class="btn primary" id="gContinue">Launch</button>
+        </div>
+        <div class="rerun-row">
+          <button class="btn ghost" id="rerunSetup">Re-run setup / configure services</button>
+        </div>
+      </section>
+
+      <!-- Screen H: Completion -->
+      <section class="screen" id="screen-h" data-step="8" hidden>
+        <h1>Setup complete 🎉</h1>
+        <p class="lead">Private AI is ready to go.</p>
+        <div class="field">
+          <label class="checkbox-row">
+            <input type="checkbox" id="startOnBoot" checked />
+            <span>Start services automatically when I log in</span>
+          </label>
+        </div>
+        <div class="actions">
+          <button class="btn primary" id="hFinish">Finish</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Toast / error region -->
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="installer.js"></script>
+</body>
+</html>

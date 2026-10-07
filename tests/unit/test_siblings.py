@@ -128,6 +128,12 @@ class TestSiblingConfig:
         assert cfg["install"] == SIBLING_INSTALL["imagegen"]
         assert cfg["url"]
 
+    def test_video_config(self):
+        cfg = get_sibling_config("video")
+        assert cfg["service"] == "Open Fantasia"
+        assert cfg["install"] == SIBLING_INSTALL["video"]
+        assert cfg["url"]
+
     def test_voice_config(self):
         cfg = get_sibling_config("voice")
         assert cfg["service"] == "Olly Voice"

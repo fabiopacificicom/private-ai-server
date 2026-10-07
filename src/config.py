@@ -73,11 +73,12 @@ except Exception:
     transformers_available = False
 
 try:
-    from huggingface_hub import model_info, snapshot_download
+    from huggingface_hub import model_info, snapshot_download, hf_hub_download
     hf_hub_available = True
 except Exception:
     model_info = None
     snapshot_download = None
+    hf_hub_download = None
     hf_hub_available = False
 
 try:
@@ -98,7 +99,7 @@ except Exception:
 # Constants — all overridable via environment variables
 # ---------------------------------------------------------------------------
 
-MAX_CACHE_MODELS: int = int(os.getenv("MAX_CACHE_MODELS", "2"))
+MAX_CACHE_MODELS: int = int(os.getenv("MAX_CACHE_MODELS", "1"))
 COOLDOWN_SECONDS: int = int(os.getenv("MODEL_LOAD_COOLDOWN", "300"))
 MAX_CONCURRENT_PULLS: int = int(os.getenv("MAX_CONCURRENT_PULLS", "2"))
 STREAMING_THREAD_TIMEOUT: int = int(os.getenv("STREAMING_THREAD_TIMEOUT", "30"))
@@ -106,6 +107,15 @@ Q4_THRESHOLD_BYTES: int = int(os.getenv("MODEL_Q4_THRESHOLD_BYTES", str(20 * 10*
 # Layer-splitting: cap GPU memory to leave a safety buffer, allow CPU RAM offload
 MAX_GPU_MEMORY: str = os.getenv("MAX_GPU_MEMORY", "12GiB")
 MAX_CPU_MEMORY: str = os.getenv("MAX_CPU_MEMORY", "48GiB")
+# Quantization mode for the transformers fallback:
+#   auto -> size-based NF4 (>= Q4_THRESHOLD_BYTES) else fp16
+#   nf4 / fp16                 -> force that path (nf4 needs bitsandbytes)
+#   awq / exl2                 -> requested; engines NOT bundled, logged + falls back
+#                                (see .specs/plans/phase1-implementation.md integration point)
+TRANSFORMERS_QUANT: str = os.getenv("TRANSFORMERS_QUANT", "auto").strip().lower()
+# Optional KV-cache dtype for the transformers generate path ("" = model default).
+# Supports "int8" / "float8" -> quantized cache (quantized KV-cache on low-memory GPUs)
+KV_CACHE_DTYPE: str = os.getenv("KV_CACHE_DTYPE", "").strip().lower()
 # Semicolon-separated extra dirs to scan for GGUF/HF models outside HF_HOME
 MODELS_EXTRA_SCAN_DIRS: list = [
     d.strip() for d in os.getenv("MODELS_EXTRA_SCAN_DIRS", "").split(";")

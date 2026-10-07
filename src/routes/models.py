@@ -260,14 +260,19 @@ async def pull_model(payload: Dict[str, Any]):
     if not model_name:
         raise HTTPException(status_code=400, detail="Missing 'model'")
 
-    if str(model_name).lower().endswith(".gguf"):
+    # Local .gguf path (e.g. E:\models\...\file.gguf) -> register, no download.
+    if _is_local_gguf_path(model_name):
         return _register_gguf(model_name)
+
+    # HF single-file reference (e.g. unsloth/Muse-Glimmer-30B-GGUF/Muse-Glimmer-30B-UD-IQ2_XXS.gguf)
+    # -> download just that file from the Hub.
+    hf_file = _hf_file_ref(model_name)
 
     quant = payload.get("quantize", "auto")
     raw_init = payload.get("init", False)
     init = raw_init.lower() in ("1", "true", "yes", "y") if isinstance(raw_init, str) else bool(raw_init)
 
-    if not config.hf_hub_available or config.snapshot_download is None:
+    if not config.hf_hub_available or config.snapshot_download is None or config.hf_hub_download is None:
         raise HTTPException(status_code=500, detail="huggingface_hub not available. pip install huggingface_hub")
 
     job_id = str(uuid.uuid4())
@@ -277,8 +282,75 @@ async def pull_model(payload: Dict[str, Any]):
         "started_at": None, "finished_at": None, "error": None,
         "local_path": None, "size_bytes": None, "preferred_quantized": None,
     })
-    asyncio.create_task(_background_pull(job_id, model_name, quant, init))
+    asyncio.create_task(_background_pull(job_id, model_name, quant, init, hf_file))
     return {"status": "accepted", "job_id": job_id}
+
+
+def _is_local_gguf_path(model_name: str) -> bool:
+    """True if the value looks like a local .gguf file path (not a HF reference)."""
+    if not str(model_name).lower().endswith(".gguf"):
+        return False
+    s = str(model_name)
+    # Windows drive path, or an existing file, or contains a backslash => local
+    if "\\" in s or os.path.isdir(os.path.dirname(s) or ".") or os.path.isfile(s):
+        return True
+    # HF references use forward slashes and have 2+ path segments (owner/repo/file.gguf)
+    return False
+
+
+def _hf_file_ref(model_name: str) -> Optional[str]:
+    """If the value is a HF repo/file reference (owner/repo/dir/file.gguf), return
+    the path-in-repo filename; otherwise None (whole-repo pull)."""
+    s = str(model_name)
+    if not s.lower().endswith(".gguf"):
+        return None
+    # A HF file reference has >= 2 '/' separators and no drive letter / backslash.
+    if "\\" in s or ":" in s:
+        return None
+    parts = s.split("/")
+    if len(parts) < 2:
+        return None
+    # last segment is the filename, the rest is the repo id
+    return parts[-1]
+
+
+@router.get(
+    "/hub/search",
+    summary="Search HuggingFace Hub models",
+    description=(
+        "Search the HuggingFace Hub for models matching a query. Returns repo ids "
+        "the user can pull. Uses `HfApi.list_models(search=...)`."
+    ),
+    tags=["models"],
+)
+async def hub_search(q: str = "", limit: int = 20):
+    if not config.hf_hub_available:
+        raise HTTPException(status_code=500, detail="huggingface_hub not available.")
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        limit = max(1, min(limit, 50))
+        if q.strip():
+            models = await asyncio.to_thread(
+                api.list_models, search=q.strip(), limit=limit
+            )
+        else:
+            models = await asyncio.to_thread(api.list_models, limit=limit)
+        results = [
+            {
+                "id": m.modelId,
+                "pipeline_tag": getattr(m, "pipeline_tag", None),
+                "downloads": getattr(m, "downloads", None),
+                "likes": getattr(m, "likes", None),
+                "modality": classify_modality(m.modelId),
+            }
+            for m in models
+        ]
+        return {"models": results}
+    except Exception as e:
+        config.log.exception("Hub search failed for %r", q)
+        raise HTTPException(status_code=502, detail=f"Hub search failed: {e}")
 
 
 def _register_gguf(model_name: str) -> dict:
@@ -304,7 +376,8 @@ def _register_gguf(model_name: str) -> dict:
     return {"status": "accepted", "job_id": job_id}
 
 
-async def _background_pull(job_id: str, model_name: str, quant: str, init: bool) -> None:
+async def _background_pull(job_id: str, model_name: str, quant: str, init: bool,
+                           hf_file: Optional[str] = None) -> None:
     db = get_job_db()
     if not db.get_job(job_id):
         return
@@ -315,13 +388,22 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
     })
 
     try:
-        config.log.info("Pull start: %s (job=%s quant=%s)", model_name, job_id, quant)
-        cache_path = resolve_model_cache_path(model_name)
+        # For a single-file reference (owner/repo/file.gguf), split into the
+        # repo id and the path-in-repo filename. model_name stays as the full
+        # reference for cache-path / metadata bookkeeping.
+        repo_id = model_name
+        filename = hf_file
+        if hf_file:
+            repo_id = model_name[: -(len(hf_file) + 1)]  # strip "/<filename>"
+
+        config.log.info("Pull start: %s (job=%s quant=%s hf_file=%s)",
+                        model_name, job_id, quant, hf_file)
+        cache_path = resolve_model_cache_path(repo_id)
 
         size_bytes: Optional[int] = None
         try:
             if config.model_info is not None:
-                info = await asyncio.to_thread(config.model_info, model_name)
+                info = await asyncio.to_thread(config.model_info, repo_id)
                 size_bytes = sum(getattr(s, "size", 0) or 0 for s in (getattr(info, "siblings", []) or []))
         except Exception:
             config.log.exception("Could not probe size for %s", model_name)
@@ -329,16 +411,25 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
 
         await config.download_semaphore.acquire()
         try:
-            # Resume any incomplete blobs (huggingface_hub continues .incomplete files).
-            # local_dir_use_symlinks=False forces file copies instead of symlinks,
-            # avoiding WinError 1314 on Windows (no admin/Developer Mode needed).
-            dl_task = asyncio.create_task(
-                asyncio.to_thread(
-                    config.snapshot_download,
-                    repo_id=model_name,
-                    local_dir_use_symlinks=False,
+            if filename:
+                # Single-file pull (e.g. unsloth/Muse-Glimmer-30B-GGUF/file.gguf)
+                dl_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        config.hf_hub_download,
+                        repo_id=repo_id,
+                        filename=filename,
+                    )
                 )
-            )
+            else:
+                # Whole-repo pull. local_dir_use_symlinks=False forces file copies
+                # instead of symlinks, avoiding WinError 1314 on Windows.
+                dl_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        config.snapshot_download,
+                        repo_id=model_name,
+                        local_dir_use_symlinks=False,
+                    )
+                )
             while not dl_task.done():
                 await asyncio.sleep(2)
                 downloaded = calculate_downloaded_bytes(cache_path)
@@ -353,7 +444,7 @@ async def _background_pull(job_id: str, model_name: str, quant: str, init: bool)
         if size_bytes is None:
             try:
                 if config.model_info is not None:
-                    info = await asyncio.to_thread(config.model_info, model_name)
+                    info = await asyncio.to_thread(config.model_info, repo_id)
                     size_bytes = sum(getattr(s, "size", 0) or 0 for s in (getattr(info, "siblings", []) or []))
             except Exception:
                 pass

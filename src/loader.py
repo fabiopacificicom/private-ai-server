@@ -9,6 +9,8 @@ import state
 import model_cache as mcache
 import gguf as gguf_backend
 
+from quant import should_quantize, kv_cache_dtype_kwargs, build_max_memory
+
 MANIFEST_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models_manifest.json")
 
 # ---------------------------------------------------------------------------
@@ -110,6 +112,9 @@ def extract_text_from_pipeline_result(val: Any) -> str:
 # ---------------------------------------------------------------------------
 
 def _probe_model_size(model_name: str) -> Optional[int]:
+    # Local files / paths are not valid HF repo ids — skip the Hub probe.
+    if _looks_like_local_path(model_name):
+        return None
     try:
         if config.hf_hub_available and config.model_info is not None:
             info = config.model_info(model_name)
@@ -120,6 +125,19 @@ def _probe_model_size(model_name: str) -> Optional[int]:
     except Exception:
         config.log.exception("Failed to probe model size for %s", model_name)
     return None
+
+
+def _looks_like_local_path(name: str) -> bool:
+    """True if the model id is a local file/path rather than a HF repo id."""
+    if not isinstance(name, str):
+        return True
+    s = name
+    # Windows drive path, backslash, or an existing file => local
+    if "\\" in s or ":" in s or os.path.isfile(s):
+        return True
+    if s.lower().endswith(".gguf"):
+        return True
+    return False
 
 
 def _resolve_local_path(model_name: str) -> Optional[str]:
@@ -193,18 +211,6 @@ def _try_vllm(model_name: str, local_path: str) -> bool:
         return False
 
 
-def _build_max_memory() -> dict:
-    """Build the max_memory dict for layer-splitting GPU/CPU offload."""
-    mm: dict = {}
-    if config.torch is not None and config.torch.cuda.is_available():
-        try:
-            mm[0] = config.MAX_GPU_MEMORY
-        except Exception:
-            pass
-    mm["cpu"] = config.MAX_CPU_MEMORY
-    return mm
-
-
 def _load_transformers(model_name: str, local_path: str, size_bytes: Optional[int]) -> None:
     if not config.transformers_available:
         raise RuntimeError(
@@ -214,13 +220,14 @@ def _load_transformers(model_name: str, local_path: str, size_bytes: Optional[in
 
     device = 0 if (config.torch is not None and config.torch.cuda.is_available()) else -1
     config.log.info("Loading with transformers (device=%s, max_memory=%s): %s",
-                    device, _build_max_memory(), model_name)
+                    device, build_max_memory(), model_name)
     start_ns = time.time_ns()
 
     preferred_quant = state.model_meta.get(model_name, {}).get("preferred_quantized")
-    should_q4 = bool(preferred_quant) if preferred_quant is not None else (
-        config.bitsandbytes_available and device >= 0
-        and size_bytes is not None and size_bytes >= config.Q4_THRESHOLD_BYTES
+    forced_quant = getattr(config, "TRANSFORMERS_QUANT", "auto").strip().lower()
+    should_q4 = should_quantize(
+        forced_quant, preferred_quant,
+        bool(config.bitsandbytes_available), device, size_bytes,
     )
 
     pipe = None
@@ -236,7 +243,7 @@ def _load_transformers(model_name: str, local_path: str, size_bytes: Optional[in
             config.log.info("4-bit (NF4) load for %s (layer-split GPU/CPU)", model_name)
             model = config.AutoModelForCausalLM.from_pretrained(
                 local_path, quantization_config=bnb_cfg, device_map="auto",
-                max_memory=_build_max_memory(),
+                max_memory=build_max_memory(),
                 trust_remote_code=True, local_files_only=True,
             )
             tok = config.AutoTokenizer.from_pretrained(local_path, use_fast=False,
@@ -255,7 +262,7 @@ def _load_transformers(model_name: str, local_path: str, size_bytes: Optional[in
                 config.log.info("GPU fp16 load for %s (layer-split GPU/CPU)", model_name)
                 model = config.AutoModelForCausalLM.from_pretrained(
                     local_path, device_map="auto", torch_dtype=config.torch.float16,
-                    max_memory=_build_max_memory(),
+                    max_memory=build_max_memory(),
                     trust_remote_code=True, local_files_only=True,
                 )
                 tok = config.AutoTokenizer.from_pretrained(local_path, use_fast=False,
@@ -295,12 +302,12 @@ def _load_transformers(model_name: str, local_path: str, size_bytes: Optional[in
                             bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=config.torch.float16,
                         )
                         model_kwargs["device_map"] = "auto"
-                        model_kwargs["max_memory"] = _build_max_memory()
+                        model_kwargs["max_memory"] = build_max_memory()
                         quantized = True
                     else:
                         model_kwargs["torch_dtype"] = config.torch.float16
                         model_kwargs["device_map"] = "auto"
-                        model_kwargs["max_memory"] = _build_max_memory()
+                        model_kwargs["max_memory"] = build_max_memory()
                     model = config.AutoModelForCausalLM.from_pretrained(local_path, **model_kwargs)
                     tok = config.AutoTokenizer.from_pretrained(
                         local_path, use_fast=False, trust_remote_code=True, local_files_only=True,

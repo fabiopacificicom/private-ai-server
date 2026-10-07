@@ -44,12 +44,13 @@ class TestServices:
         resp = _get("/services")
         data = json.loads(resp.read())
         assert "imagegen" in data
+        assert "video" in data
         assert "voice" in data
 
     def test_services_have_install_commands(self):
         resp = _get("/services")
         data = json.loads(resp.read())
-        for key in ("imagegen", "voice"):
+        for key in ("imagegen", "video", "voice"):
             assert "install" in data[key]
             assert "git clone" in data[key]["install"]
 
@@ -63,6 +64,21 @@ class TestGenerate:
         if available:
             assert status == 200
             assert body[:4] in (b"\x89PNG", b"\xff\xd8\xff")  # PNG or JPEG magic
+        else:
+            assert status == 503
+            assert "Open Fantasia" in json.loads(body)["detail"]
+
+
+class TestVideo:
+    def test_video_routes_to_fantasia(self):
+        # If Fantasia is up, expect mp4 bytes (200). If down, expect 503 + install prompt.
+        services = json.loads(_get("/services").read())
+        available = services.get("video", {}).get("available")
+        status, body = _post("/video", {"prompt": "a cat walking"})
+        if available:
+            assert status == 200
+            # MP4 files start with the ftyp box (bytes 4-8)
+            assert body[4:8] == b"ftyp"
         else:
             assert status == 503
             assert "Open Fantasia" in json.loads(body)["detail"]

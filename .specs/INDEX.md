@@ -1,6 +1,6 @@
 # .specs/ Directory Index
 
-This directory contains all project specifications, plans, reviews, and documentation for the AI Inference Server.
+This directory contains all project specifications, plans, reviews, and documentation for the Private AI Inference Server.
 
 ---
 
@@ -9,11 +9,11 @@ This directory contains all project specifications, plans, reviews, and document
 ### For Users
 
 - 📖 [README.md](../README.md) - Start here for usage and API reference
-- 🗺️ [ROADMAP.md](ROADMAP.md) - Feature roadmap and timeline (v0.9 → v3.0)
+- 🗺️ [ROADMAP.md](ROADMAP.md) - Feature roadmap and timeline (v1.0 → v3.0)
 
 ### For Developers
 
-- 📋 [Phase 1 Implementation Plan](plans/phase1-implementation.md) - Next steps for v1.0
+- 🗺️ [ROADMAP.md](ROADMAP.md) - Current status + what's next
 - 🔍 [Server Review](SERVER-REVIEW.md) - Architecture analysis and recommendations
 - 📝 [Coder Guidelines](../.github/instructions/coder-guidelines.instructions.md) - Coding standards
 - 🤖 [Copilot Instructions](../.github/copilot-instructions.md) - AI agent onboarding
@@ -31,20 +31,22 @@ This directory contains all project specifications, plans, reviews, and document
 
 #### [ROADMAP.md](ROADMAP.md)
 
-**Purpose**: Complete feature roadmap from v0.9 (MVP) to v3.0  
+**Purpose**: Complete feature roadmap from v1.0 (production-ready) to v3.0  
 **Size**: ~450 lines  
 **Contents**:
 
-- Phase 1: Stability & Performance (v1.0) - 6 tasks
-- Phase 2: Advanced Features (v1.5) - 5 tasks
-- Phase 3: Production Hardening (v2.0) - 5 tasks
-- Phase 4: Ecosystem Integration (v2.5) - 4 tasks
-- Phase 5: Advanced Optimizations (v3.0) - 4 tasks
+- ✅ Phase 1: Stability & Performance (v1.0) — COMPLETED
+- ✅ Sibling orchestration + desktop app + pull UX (v1.1) — COMPLETED
+- ✅ Release installer with guided setup (v1.1.0) — COMPLETED
+- 🚧 Phase 2: Advanced Features (v1.5) — NEXT UP
+- Phase 3: Production Hardening (v2.0)
+- Phase 4: Ecosystem Integration (v2.5)
+- Phase 5: Advanced Optimizations (v3.0)
 - Deprecation & migration plan
 - Success metrics
 - Changelog
 
-**When to read**: Planning new features, understanding priorities, setting timelines
+**When to read**: Planning new features, understanding priorities, setting timelines, deciding what's next
 
 ---
 
@@ -111,7 +113,7 @@ This directory contains all project specifications, plans, reviews, and document
 
 **Purpose**: Detailed step-by-step implementation guide for v1.0  
 **Size**: ~650 lines  
-**Status**: 🔄 In Progress  
+**Status**: ✅ Implemented (v1.0)  
 **Contents**:
 
 - Task 1.3: Health Check Endpoint
@@ -125,7 +127,31 @@ This directory contains all project specifications, plans, reviews, and document
 - Performance benchmarks
 - Rollout plan (3 weeks)
 
-**When to read**: Implementing v1.0 features, need code examples, setting up tests
+**When to read**: Understanding v1.0 feature implementation details
+
+---
+
+#### [plans/model-classification-plan.md](plans/model-classification-plan.md)
+
+**Purpose**: Plan for classifying models by modality (chat / vision / imagegen / voice / embeddings)  
+**Status**: ✅ Implemented (v1.1, Level 1)  
+**When to read**: Understanding modality classification design
+
+---
+
+#### [plans/sibling-orchestration-level2-3-plan.md](plans/sibling-orchestration-level2-3-plan.md)
+
+**Purpose**: Plan for proxying image/voice to sibling servers (Open Fantasia, Olly Voice) + setup wizard  
+**Status**: ✅ Implemented (v1.1, Level 2 & 3)  
+**When to read**: Understanding sibling-server orchestration
+
+---
+
+#### [plans/release-installer-guided-setup-plan.md](plans/release-installer-guided-setup-plan.md)
+
+**Purpose**: Plan for the native Windows installer with 8-screen guided setup (Tauri + NSIS)  
+**Status**: ✅ Implemented (v1.1.0)  
+**When to read**: Understanding the installer / desktop app / server bundling
 
 ---
 
@@ -162,17 +188,36 @@ This directory contains all project specifications, plans, reviews, and document
 
 ---
 
+#### [plans/PERFORMANCE_FIXES.md](plans/PERFORMANCE_FIXES.md)
+
+**Purpose**: Performance fixes and tuning notes  
+**Status**: Reference  
+**When to read**: Investigating performance issues
+
+---
+
+### docs/ Directory
+
+#### [docs/database-schema.md](docs/database-schema.md)
+
+**Purpose**: SQLite job persistence schema  
+**Status**: Reference  
+**When to read**: Understanding the jobs.db schema
+
+---
+
 ## Document Relationships
 
 ```
 User Journey:
-README.md → ROADMAP.md → plans/phase1-implementation.md
+README.md → ROADMAP.md → plans/release-installer-guided-setup-plan.md (done)
+                       → Phase 2 (v1.5) features
 
 Developer Onboarding:
 .github/copilot-instructions.md → .github/instructions/coder-guidelines.instructions.md → SERVER-REVIEW.md
 
 Planning Flow:
-ROADMAP.md → plans/phase1-implementation.md → Implementation
+ROADMAP.md → plans/feature-plan.md → Implementation
 
 Review Cycle:
 Implementation → SERVER-REVIEW.md → ROADMAP.md updates
@@ -182,15 +227,7 @@ Implementation → SERVER-REVIEW.md → ROADMAP.md updates
 
 ## Version History
 
-### v0.9 (Current - MVP)
-
-- Core server implementation (app.py)
-- Background download system
-- LRU caching
-- CUDA memory management
-- Documentation created
-
-### v1.0 (Planned - Production-Ready)
+### v1.0 (Production-Ready) — COMPLETED
 
 - Streaming support
 - Health checks
@@ -198,6 +235,20 @@ Implementation → SERVER-REVIEW.md → ROADMAP.md updates
 - Progress tracking
 - Persistent jobs
 - Improved errors
+
+### v1.1 (Local Inference Orchestrator) — COMPLETED
+
+- Model modality classification (Level 1)
+- Sibling-server orchestration (Level 2 & 3)
+- Tauri desktop app wrapper
+- Searchable Hub model picker + single-file GGUF pull
+- **Release installer with guided setup** (Tauri + NSIS)
+- Single-command release packaging
+- Chat UI redesign + case-study screenshots
+
+### v1.5 (Phase 2 — Advanced Features) — NEXT UP
+
+See [ROADMAP.md](ROADMAP.md) "Phase 2" section.
 
 See [ROADMAP.md](ROADMAP.md) for complete version history and future plans.
 
